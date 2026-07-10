@@ -72,6 +72,16 @@ cd frontend && npm run build                               # 빌드 → FastAPI�
 
 API 문서: http://localhost:8007/docs
 
+수집 원본 DB(dcinside.db)는 저장소에 없다. 별도로 준비해 `DCINSIDE_DB_PATH` 로
+연결하며, 구조만 `schema/dcinside_source.sql` 에 남겨 두었다. 원본 없이 띄우려면
+빈 DB를 만들어 물리거나 `COLLECTOR_BACKEND=mock` 을 쓴다.
+
+```bash
+sqlite3 dcinside.db < schema/dcinside_source.sql
+```
+
+파이프라인 자체 DB(`data/pipeline.db`)는 첫 실행 때 자동 생성된다.
+
 ## 화면 (Vue 3 · MVVM)
 
 | 경로 | 내용 |
