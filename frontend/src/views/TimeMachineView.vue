@@ -2,6 +2,7 @@
 // View — 관제 타임머신: 매 사이클 스냅샷을 스크럽 재생 + 시간대 범위 집계.
 import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
 import { api } from '../models/api.js'
+import { currentGame } from '../models/gameState.js'
 import BoardView from '../components/BoardView.vue'
 
 // ── 스크럽 재생 ────────────────────────────────────────────────────
@@ -99,6 +100,9 @@ async function loadRange() {
   }
 }
 
+// 게임이 바뀌면 그 게임의 스냅샷 타임라인으로 다시 로드 (재생 중이면 정지)
+watch(currentGame, () => { stop(); range.value = null; loadIndex() })
+
 onMounted(loadIndex)
 onUnmounted(stop)
 </script>
@@ -162,9 +166,11 @@ onUnmounted(stop)
       </div>
     </div>
 
-    <!-- 복원된 보드 (읽기전용) — 위 타임라인 박스와 간격을 둔다 -->
+    <!-- 복원된 보드 (읽기전용) — 위 타임라인 박스와 간격을 둔다.
+         당시 주제를 전부 표시(topic-limit 0), 카드 클릭은 "당시 구성" 모드로 -->
     <BoardView v-if="board" class="board-gap" :topics="board.topics"
-      :categories="board.results" :stats="board.stats" />
+      :categories="board.results" :stats="board.stats"
+      :topic-limit="0" :snapshot-at="board.snapshot_ts ?? board.updated_at ?? ''" />
     <div v-else-if="!loading" class="card empty board-gap">
       구간을 선택하고 "이 구간 재생"을 눌러 과거 관제 화면을 불러오세요.
     </div>

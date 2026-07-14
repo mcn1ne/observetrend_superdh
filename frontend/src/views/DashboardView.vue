@@ -45,6 +45,7 @@ function fmtTime(iso) {
     <div v-if="statusVm.error.value" class="error-banner">서버 연결 실패: {{ statusVm.error.value }}</div>
 
     <BoardView
+      linkable
       :topics="topicsVm.topics.value"
       :categories="catVm.categories.value"
       :stats="{ total_posts_window: catVm.stats.value.total_posts_window, n_topics: topicsVm.stats.value.n_topics }"

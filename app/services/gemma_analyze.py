@@ -63,15 +63,22 @@ def _parse(out: str) -> dict | None:
     return None
 
 
-def analyze_batch() -> dict:
-    """큐에서 글 N건을 꺼내 단건씩 분석. 반환: {taken, saved, failed_parse}"""
+def analyze_batch(game_id: str | None = None) -> dict:
+    """한 게임의 큐에서 글 N건을 꺼내 단건씩 분석.
+
+    반환: {taken, saved, failed_parse}. game_id를 명시해 여러 게임의 동일 post_no가
+    섞이지 않게 하고, 분석 결과와 재시도 횟수도 같은 게임 파티션에 기록한다.
+    """
     from app.services.mlx_runtime import generate_text
 
-    chunk = db.load_analysis_queue(limit=settings.gemma_batch_size)
+    game_id = game_id or settings.default_game_id
+    chunk = db.load_analysis_queue(limit=settings.gemma_batch_size, game_id=game_id)
     if not chunk:
         return {"taken": 0, "saved": 0, "failed_parse": 0}
 
-    saved_rows, missed = [], []
+    from app.services.categorize import assign_from_analysis
+
+    saved_rows, assignments, missed = [], [], []
     for p in chunk:
         body = f"{p['title']}\n{p.get('text') or ''}".strip()[:_MAX_INPUT_CHARS]
         out = generate_text(
@@ -85,9 +92,12 @@ def analyze_batch() -> dict:
         if parsed is None:
             missed.append(p["id"])
             continue
-        saved_rows.append({"post_id": p["id"], **parsed})
+        saved_rows.append({"game_id": game_id, "post_id": p["id"], **parsed})
+        assignments.append((p, parsed))
 
     db.save_analyses(saved_rows)
-    db.bump_analysis_attempts(missed)   # 다음 라운드에 재시도 (3회 초과 시 실패 처리)
+    for post, parsed in assignments:
+        assign_from_analysis(post, parsed, game_id)
+    db.bump_analysis_attempts(missed, game_id)  # 다음 라운드에 재시도 (3회 초과 시 실패 처리)
     return {"taken": len(chunk), "saved": len(saved_rows),
             "failed_parse": len(missed)}

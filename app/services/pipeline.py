@@ -1,7 +1,7 @@
 """07-pipeline-integration.md — 전체 연결 (영속 카테고리 기반 실시간 관제).
 
 - collect_step(매 1분): DB1(수집원) → 전처리 → DB2 적재 → 캡셔닝(이미지)
-  → 새 글만 임베딩 → 카테고리 배정 (벡터 1차 + Gemma 4 보조)
+  → 새 글만 임베딩. 카테고리는 별도 adapters4 워커의 1회 분석 결과로 배정
 - analyze_step(매 1분): 카테고리별 열기 점수·버스트 판정 → 점수 스냅샷 저장
   → 급증 카테고리만 요약(05) → 4B 알림 판단(06) → 쿨다운(카테고리 id 기준)
 
@@ -17,9 +17,9 @@ import numpy as np
 from app import db
 from app.config import settings
 from app.services.caption import get_captioner
-from app.services.categorize import assign_posts, get_categorizer
+from app.services.categorize import get_categorizer
 from app.services.clustering import get_clusterer, group_by_label
-from app.services.collect import get_collector
+from app.services.collect import DcinsideCollector, get_collector
 from app.services.detection import cluster_heat, is_burst, post_age_minutes
 from app.services.embedding import get_embedder
 from app.services.judge import build_judge_input, get_judge
@@ -27,6 +27,7 @@ from app.services.preprocess import preprocess
 from app.services.summarize import get_summarizer
 
 _collector = None
+_collectors: dict = {}   # game_id -> DcinsideCollector (커서 인메모리 유지)
 
 
 def slot_status() -> dict:
@@ -40,7 +41,8 @@ def slot_status() -> dict:
                               else f"dcinside ({settings.dcinside_db_path})"},
         "captioner": {"backend": settings.captioner_backend, "ready": captioner.ready, "name": captioner.name},
         "embedding": {"backend": settings.embedding_backend, "ready": embedder.ready, "name": embedder.name},
-        "categorizer": {"backend": settings.categorizer_backend, "ready": categorizer.ready, "name": categorizer.name},
+        "categorizer": {"backend": "adapters4", "ready": settings.gemma_analysis_enabled,
+                        "name": "Gemma 4 adapters4 (major + topic_label 규칙 매핑)"},
         "clustering": {"backend": settings.clustering_backend, "ready": clusterer.ready,
                        "name": clusterer.name + " — 안전망 점검용"},
         "summarizer": {"backend": settings.summarizer_backend, "ready": summarizer.ready, "name": summarizer.name},
@@ -50,49 +52,66 @@ def slot_status() -> dict:
 
 
 def collect_step() -> dict:
-    """수집 → 전처리 → 캡셔닝 → 새 글만 임베딩 → 카테고리 배정 (다이얼 A)."""
+    """수집 → 전처리 → 캡셔닝 → 새 글만 임베딩 → 카테고리 배정 (다이얼 A).
+
+    멀티게임: dcinside 는 settings.games 를 돌며 게임별 소스/커서로 수집(글에 game_id 태깅).
+    임베딩은 게임 무관이라 전 게임 배치로, 카테고리 배정은 게임 파티션이라 게임별로 돈다.
+    """
     global _collector
-    if _collector is None:
-        _collector = get_collector()
+    total_fetched = total_saved = 0
 
-    raw = _collector.fetch_new_posts()
-    cleaned = preprocess(raw)                    # 02
-    saved = db.save_posts(cleaned)
+    if settings.collector_backend == "dcinside":
+        game_ids = [g.id for g in settings.games]
+        for g in settings.games:
+            c = _collectors.get(g.id)
+            if c is None:
+                c = _collectors[g.id] = DcinsideCollector(
+                    g.id, g.source_db_path, g.source_game, g.source_gallery,
+                )
+            raw = c.fetch_new_posts()
+            total_saved += db.save_posts(preprocess(raw))
+            db.set_game_cursor(g.id, c._last_post_no)   # 커서 영속
+            total_fetched += len(raw)
+    else:
+        if _collector is None:
+            _collector = get_collector()
+        raw = _collector.fetch_new_posts()
+        dg = settings.default_game_id
+        total_saved = db.save_posts(preprocess([{**p, "game_id": dg} for p in raw]))
+        total_fetched = len(raw)
+        game_ids = [dg]
 
-    # 새 글만 1회 임베딩 (재임베딩 금지 — 03). 이미지가 있으면 캡션을 텍스트에 포함.
+    # 새 글만 1회 임베딩 (게임 무관 배치). 캡셔닝은 여기서 하지 않는다 —
+    # 동기로 하면 버스트 때 수집 루프가 밀린다. 별도 캡션 워커(caption_batch)가
+    # 한가할 때 다운로드→캡션 후 그 글만 재임베딩한다 (services/caption.py).
     pending = db.load_posts_without_embedding()
     embedded = 0
     if pending:
-        captioner = get_captioner()
-        texts, captions = [], []
-        for p in pending:
-            cap = captioner.caption(p["image_path"]) if p.get("image_path") else None
-            captions.append(cap)
-            texts.append(f"{p['text']} [이미지] {cap}" if cap else p["text"])
-        vectors = get_embedder().encode(texts)
-        db.save_embeddings([p["id"] for p in pending], vectors, captions)
+        vectors = get_embedder().encode([p["text"] for p in pending])
+        db.save_embeddings([(p["game_id"], p["id"]) for p in pending], vectors)
         embedded = len(pending)
 
-    # 카테고리 배정 (벡터 1차 매칭 + LLM 보조)
-    unassigned = db.load_posts_without_category()
-    cat_stats = assign_posts(unassigned) if unassigned else {}
+    # 카테고리는 별도 adapters4 워커가 글을 1회 분석한 결과(major+topic_label)로
+    # 배정한다. 여기서 기본형 Gemma를 추가 호출하지 않는다.
+    awaiting_category = sum(len(db.load_posts_without_category(gid, limit=501)) for gid in game_ids)
+    return {"fetched": total_fetched, "saved": total_saved, "embedded": embedded,
+            "awaiting_category": awaiting_category}
 
-    return {"fetched": len(raw), "saved": saved, "embedded": embedded, **cat_stats}
 
-
-def analyze_step() -> tuple[list[dict], dict, list[dict]]:
-    """매분 분석 (다이얼 B·C).
+def analyze_step(game_id: str | None = None) -> tuple[list[dict], dict, list[dict]]:
+    """매분 분석 (다이얼 B·C) — game_id 게임 단위로 독립 수행.
 
     1) 카테고리(대분류) 점수 집계 — 화면 표시·점수 이력용
     2) ★주제(topic) 탐지 — 코사인 묶기 + 영속 추적. 버스트 → 요약 → 알림 판단은
        이 주제 단위로 돈다 ("오늘 새로 뜬 구체적 이슈"가 알림의 단위)
     """
+    game_id = game_id or settings.default_game_id
     t0 = time.monotonic()
     now = datetime.now(timezone.utc)
 
-    all_posts = db.load_recent_posts(settings.window_hours)
+    all_posts = db.load_recent_posts(settings.window_hours, game_id)
     posts = [p for p in all_posts if p.get("embedding") is not None]
-    categories = {c["id"]: c for c in db.load_categories()}
+    categories = {c["id"]: c for c in db.load_categories(game_id)}
     if len(posts) < settings.topic_min_size:
         return [], {"total_posts_window": len(posts), "n_categories": 0, "n_topics": 0,
                     "duration_sec": 0.0, "message": "분석할 글이 아직 부족합니다"}, []
@@ -133,7 +152,7 @@ def analyze_step() -> tuple[list[dict], dict, list[dict]]:
             "alerted": False,
         })
 
-    db.save_score_snapshot(snapshots)
+    db.save_score_snapshot(snapshots, game_id)
     db.prune_score_history()
 
     # ── 2) 주제 탐지 → 버스트만 요약 → 파인튜닝 4B 판단 → 알림 ────
@@ -141,11 +160,11 @@ def analyze_step() -> tuple[list[dict], dict, list[dict]]:
 
     embeddings = np.stack([p["embedding"] for p in posts])
     since_iso = (now - timedelta(hours=settings.window_hours)).isoformat()
-    topic_groups = detect_topics(posts, embeddings, now, since_iso)
+    topic_groups = detect_topics(posts, embeddings, now, since_iso, game_id)
 
     summarizer, judge = get_summarizer(), get_judge()
     cooldown_sec = settings.cooldown_min * 60
-    cat_names = {c["id"]: c["name"] for c in db.load_categories()}
+    cat_names = {c["id"]: c["name"] for c in db.load_categories(game_id)}
 
     from app.services.topics import verify_topic_members
 
@@ -185,6 +204,9 @@ def analyze_step() -> tuple[list[dict], dict, list[dict]]:
                  "created_at": p["created_at"]}
                 for p in group[-5:][::-1]
             ],
+            # 이 사이클에 화면에 보인 멤버 전체 — 타임머신 "당시 구성" 복원용
+            # (스냅샷 블롭에 그대로 저장됨, 건당 ~1KB·30일 +49MB 실측)
+            "member_ids": [p["id"] for p in group],
             "latest_at": max(created_ats),
             "summary": None,
             "decision": None,
@@ -208,7 +230,8 @@ def analyze_step() -> tuple[list[dict], dict, list[dict]]:
             burst = is_burst(max(recent_count, heat), len(group))
             item.update(size=len(group), heat=round(heat, 2), recent_count=recent_count,
                         is_burst=burst,
-                        preview=[{"title": p["title"], "url": p.get("url"),
+                        member_ids=[p["id"] for p in group],
+                        preview=[{"id": p["id"], "title": p["title"], "url": p.get("url"),
                                   "created_at": p["created_at"]} for p in group[-5:][::-1]])
             if not burst:                                # 이물질 빼니 급증이 아님
                 topics.append(item)
@@ -218,7 +241,7 @@ def analyze_step() -> tuple[list[dict], dict, list[dict]]:
             s = summarizer.summarize(group, vecs)
             # 라벨 = 멤버 글들의 adapters4 주제문구 다수결 — 판단 모델(adapters3)의
             # 학습 입력 라벨과 같은 어휘라 분포가 일치한다. 분석 전이면 주제명 폴백.
-            s["label"] = (db.majority_topic_label([p["id"] for p in group])
+            s["label"] = (db.majority_topic_label([p["id"] for p in group], game_id)
                           or tg["name"])
             item["summary"] = s
             judge_input = build_judge_input(s["label"], s["title"], s["summary"])
@@ -235,16 +258,16 @@ def analyze_step() -> tuple[list[dict], dict, list[dict]]:
                     # 그대로 파인튜닝 학습쌍(input, output)이 된다
                     db.save_alert(None, tg["name"], len(group), heat, s["summary"],
                                   decision, judge_input=judge_input,
-                                  topic_id=tg["topic_id"])
+                                  topic_id=tg["topic_id"], game_id=game_id)
                     send_alert(tg["name"], s["summary"])
             else:
                 # X(미발송) 판정도 이력에 남긴다 — 피드백으로 "알림 왔어야 했다"(미탐)를
                 # 교정할 수 있어야 학습 데이터의 O/X 균형이 잡힌다.
                 # 버스트 지속 중 매분 재판정되므로 쿨다운 간격으로만 기록.
-                if not db.has_recent_judgment(tg["name"], "X", settings.cooldown_min):
+                if not db.has_recent_judgment(tg["name"], "X", settings.cooldown_min, game_id):
                     db.save_alert(None, tg["name"], len(group), heat, s["summary"],
                                   decision, judge_input=judge_input,
-                                  topic_id=tg["topic_id"])
+                                  topic_id=tg["topic_id"], game_id=game_id)
 
         topics.append(item)
 
@@ -252,7 +275,7 @@ def analyze_step() -> tuple[list[dict], dict, list[dict]]:
     # 기준: heat ≤ 정점×calm_heat_ratio (상대) AND 최근 창 글 수 < min_recent
     # (절대) 가 calm_streak_min 사이클 연속. 창에서 사라진 주제는 heat=0 취급.
     seen_by_id = {t["topic_id"]: t for t in topics}
-    for t in db.load_topics():
+    for t in db.load_topics(game_id):
         last = t.get("last_alerted_at")
         if not last:
             continue                                 # 알림 이력 없음 — 감시 대상 아님
@@ -271,7 +294,7 @@ def analyze_step() -> tuple[list[dict], dict, list[dict]]:
             summary = (f"정점 heat {peak:.1f} → 현재 {heat:.1f} ({ratio:.0%}), "
                        f"최근 1시간 {recent}건 — 이슈 소강")
             db.save_alert(None, t["name"], item["size"] if item else 0, heat, summary,
-                          "소강", topic_id=t["id"])
+                          "소강", topic_id=t["id"], game_id=game_id)
             db.mark_topic_calmed(t["id"])
             db.update_topic_watch(t["id"], peak, 0)
             send_alert(f"{t['name']} (소강)", summary)
@@ -289,7 +312,7 @@ def analyze_step() -> tuple[list[dict], dict, list[dict]]:
         {"topic_id": t["topic_id"], "heat": t["heat"], "recent_count": t["recent_count"],
          "size": t["size"], "is_burst": t["is_burst"], "decision": t["decision"]}
         for t in topics
-    ])
+    ], game_id)
     db.prune_topic_scores(settings.snapshot_retention_days)
 
     stats = {

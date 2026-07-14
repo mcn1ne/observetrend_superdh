@@ -23,9 +23,11 @@ from app.routers import analysis
 from app.services.pipeline import analyze_step, collect_step, slot_status
 
 
-def _persist_snapshot(results, stats, topics, ts) -> None:
-    """대시보드 전체 상태를 타임머신용 DB 스냅샷으로 적재 + 보관기간 정리."""
-    db.save_snapshot(results, stats, topics, ts)
+def _analyze_and_publish(game_id: str) -> None:
+    """게임 1개를 분석하고 store 게시 + 타임머신 스냅샷 적재 (전용 스레드에서)."""
+    results, stats, topics = analyze_step(game_id)
+    ts = store.save_latest(game_id, results, stats, topics)
+    db.save_snapshot(results, stats, topics, ts, game_id)
     db.prune_snapshots(settings.snapshot_retention_days)
 
 
@@ -43,13 +45,11 @@ async def pipeline_loop():
             # ① 수집 (다이얼 A): 새 글만 가져와 임베딩·누적 저장
             await asyncio.to_thread(collect_step)
 
-            # ② 분석 (다이얼 B): "새 글만"이 아니라 최근 창 전체를 대상으로 (다이얼 C)
+            # ② 분석 (다이얼 B): 등록된 게임마다 독립 수행 (최근 창 전체, 다이얼 C)
             now = loop.time()
             if now - last_analyze >= settings.analyze_interval_sec - 1:
-                results, stats, topics = await asyncio.to_thread(analyze_step)
-                ts = store.save_latest(results, stats, topics)
-                # 타임머신: 대시보드 전체 상태를 그 시각으로 DB에 적재 + 보관기간 정리
-                await asyncio.to_thread(_persist_snapshot, results, stats, topics, ts)
+                for g in settings.games:
+                    await asyncio.to_thread(_analyze_and_publish, g.id)
                 last_analyze = now
         except Exception as e:
             print(f"[분석 루프 오류] {e}")
@@ -67,12 +67,41 @@ async def gemma_worker_loop():
 
     while True:
         try:
-            stats = await asyncio.to_thread(analyze_batch)
-            if stats["taken"] >= settings.gemma_batch_size:
+            # 게임별로 한 배치씩 공정하게 처리한다. 한 게임의 대량 백로그가
+            # 다른 게임의 최신 글 분석을 막지 않도록 라운드로빈 형태로 순회한다.
+            queue_busy = False
+            for g in settings.games:
+                stats = await asyncio.to_thread(analyze_batch, g.id)
+                if stats["taken"] >= settings.gemma_batch_size:
+                    queue_busy = True
+            if queue_busy:
                 continue                     # 큐가 밀려 있음 → 곧바로 다음 배치
         except Exception as e:
             print(f"[Gemma 분석 워커 오류] {e}")
         await asyncio.sleep(settings.gemma_worker_interval_sec)
+
+
+async def caption_worker_loop():
+    """이미지 캡션 큐 워커 — 다운로드→캡션→재임베딩 (수집·분석 루프와 독립).
+
+    글은 이미 텍스트만으로 임베딩·분석돼 있으므로 캡션이 밀려도 관제는
+    실시간으로 돈다. 캡션이 완료된 글은 다음 분석 사이클부터 이미지 내용이
+    주제 묶기에 반영된다. 큐가 남아 있으면 쉬지 않고 연속으로 소화한다.
+    """
+    from app.services.caption import caption_batch
+
+    while True:
+        try:
+            queue_busy = False
+            for g in settings.games:
+                stats = await asyncio.to_thread(caption_batch, g.id)
+                if stats["taken"] >= settings.caption_batch_size:
+                    queue_busy = True
+            if queue_busy:
+                continue                     # 큐가 밀려 있음 → 곧바로 다음 배치
+        except Exception as e:
+            print(f"[캡션 워커 오류] {e}")
+        await asyncio.sleep(settings.caption_worker_interval_sec)
 
 
 @asynccontextmanager
@@ -83,10 +112,15 @@ async def lifespan(app: FastAPI):
     gemma_task = None
     if settings.gemma_analysis_enabled:
         gemma_task = asyncio.create_task(gemma_worker_loop())
+    caption_task = None
+    if settings.captioner_backend == "mlx-vlm":
+        caption_task = asyncio.create_task(caption_worker_loop())
     yield                                          # ← 이 동안 서버가 요청을 받음
     task.cancel()                                  # 서버 종료 시 루프 정리
     if gemma_task:
         gemma_task.cancel()
+    if caption_task:
+        caption_task.cancel()
     store.set_loop_running(False)
 
 
