@@ -1,0 +1,2385 @@
+<title>TrendSys 파이프라인 해부</title>
+
+<style>
+:root {
+  --ground: #FAFAFB;
+  --panel: #F0F1F4;
+  --panel-2: #E7E9ED;
+  --ink: #15171C;
+  --ink-mid: #4A4F58;
+  --ink-soft: #6E747E;
+  --rule: #DEE1E7;
+  --rule-strong: #C6CAD3;
+  --accent: #B26205;
+  --accent-soft: #F3E4D0;
+  --live: #0F766E;
+  --live-soft: #D8ECE9;
+  --alarm: #A8201A;
+  --alarm-soft: #F6E0DE;
+  --dead: #7E848E;
+  --dead-soft: #E8EAEE;
+  --shadow: 0 1px 2px rgba(20, 23, 28, .06), 0 8px 24px -16px rgba(20, 23, 28, .3);
+
+  /* 차트 계열색 — 표면 #F0F1F4 기준으로 검증 통과
+     (최악 쌍 정상시야 ΔE 19.8 · protan 9.0 · 명도대역·채도·대비 전부 PASS) */
+  --sA: #B26205;
+  --sB: #2563B0;
+  --sC: #158A5E;
+
+  --sans: "Pretendard Variable", Pretendard, -apple-system, BlinkMacSystemFont,
+          "Apple SD Gothic Neo", "Malgun Gothic", system-ui, sans-serif;
+  --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, "Cascadia Mono",
+          "D2Coding", monospace;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --ground: #101218;
+    --panel: #181B22;
+    --panel-2: #21252E;
+    --ink: #E7E9EE;
+    --ink-mid: #AAB1BC;
+    --ink-soft: #858C97;
+    --rule: #282D37;
+    --rule-strong: #3A4150;
+    --accent: #E8A13C;
+    --accent-soft: #3A2C15;
+    --live: #4EC9B6;
+    --live-soft: #14312D;
+    --alarm: #F08279;
+    --alarm-soft: #3B1D1B;
+    --dead: #7B828D;
+    --dead-soft: #23272F;
+    --shadow: 0 1px 2px rgba(0, 0, 0, .5), 0 8px 24px -16px rgba(0, 0, 0, .8);
+
+    /* 다크 표면 #181B22 기준 별도 검증 통과 (정상시야 ΔE 20.3 · protan 8.7) */
+    --sA: #C87A1E;
+    --sB: #3E7FD4;
+    --sC: #1F9E6D;
+  }
+}
+
+:root[data-theme="dark"] {
+  --ground: #101218;
+  --panel: #181B22;
+  --panel-2: #21252E;
+  --ink: #E7E9EE;
+  --ink-mid: #AAB1BC;
+  --ink-soft: #858C97;
+  --rule: #282D37;
+  --rule-strong: #3A4150;
+  --accent: #E8A13C;
+  --accent-soft: #3A2C15;
+  --live: #4EC9B6;
+  --live-soft: #14312D;
+  --alarm: #F08279;
+  --alarm-soft: #3B1D1B;
+  --dead: #7B828D;
+  --dead-soft: #23272F;
+  --shadow: 0 1px 2px rgba(0, 0, 0, .5), 0 8px 24px -16px rgba(0, 0, 0, .8);
+
+    /* 다크 표면 #181B22 기준 별도 검증 통과 (정상시야 ΔE 20.3 · protan 8.7) */
+    --sA: #C87A1E;
+    --sB: #3E7FD4;
+    --sC: #1F9E6D;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background: var(--ground);
+  color: var(--ink);
+  font-family: var(--sans);
+  font-size: 16.5px;
+  line-height: 1.9;
+  -webkit-font-smoothing: antialiased;
+  word-break: keep-all;
+  overflow-wrap: anywhere;
+}
+
+/* ─── 레이아웃 ─────────────────────────────────────────── */
+
+.shell {
+  display: grid;
+  grid-template-columns: 1fr;
+  max-width: 1240px;
+  margin: 0 auto;
+  padding: 0 22px 120px;
+}
+
+@media (min-width: 1040px) {
+  .shell {
+    grid-template-columns: 224px minmax(0, 1fr);
+    gap: 56px;
+    padding: 0 32px 140px;
+  }
+}
+
+main { min-width: 0; }
+
+.prose { max-width: 72ch; }
+
+/* ─── 목차 레일 ────────────────────────────────────────── */
+
+.rail { display: none; }
+
+@media (min-width: 1040px) {
+  .rail {
+    display: block;
+    position: sticky;
+    top: 0;
+    align-self: start;
+    max-height: 100vh;
+    overflow-y: auto;
+    padding: 46px 0 40px;
+    font-family: var(--mono);
+    font-size: 12px;
+    line-height: 1.6;
+  }
+}
+
+.rail-title {
+  text-transform: uppercase;
+  letter-spacing: .13em;
+  font-size: 10px;
+  color: var(--ink-soft);
+  padding-bottom: 12px;
+  margin-bottom: 14px;
+  border-bottom: 1px solid var(--rule);
+}
+
+.rail a {
+  display: block;
+  padding: 5px 0 5px 12px;
+  color: var(--ink-mid);
+  text-decoration: none;
+  border-left: 2px solid var(--rule);
+}
+
+.rail a:hover { color: var(--accent); border-left-color: var(--accent); }
+.rail a:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.rail .sub { padding-left: 26px; color: var(--ink-soft); font-size: 11px; }
+
+/* ─── 표제부 ───────────────────────────────────────────── */
+
+.masthead { padding: 68px 0 40px; border-bottom: 2px solid var(--ink); }
+
+.eyebrow {
+  font-family: var(--mono);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: .16em;
+  color: var(--accent);
+  margin-bottom: 20px;
+}
+
+h1 {
+  font-size: clamp(2.3rem, 6vw, 3.5rem);
+  line-height: 1.16;
+  letter-spacing: -.035em;
+  font-weight: 800;
+  margin: 0 0 22px;
+  text-wrap: balance;
+}
+
+.standfirst {
+  font-size: 1.13rem;
+  line-height: 1.85;
+  color: var(--ink-mid);
+  max-width: 60ch;
+  margin: 0 0 30px;
+}
+
+.stamp {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 24px;
+  font-family: var(--mono);
+  font-size: 12px;
+  color: var(--ink-soft);
+  padding-top: 6px;
+}
+
+.stamp b { color: var(--ink-mid); font-weight: 500; }
+
+/* ─── 수치 타일 ────────────────────────────────────────── */
+
+.metrics {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(148px, 1fr));
+  gap: 1px;
+  background: var(--rule);
+  border: 1px solid var(--rule);
+  margin: 40px 0 8px;
+}
+
+.metric { background: var(--ground); padding: 18px 20px 20px; }
+
+.metric-k {
+  font-family: var(--mono);
+  font-size: 10.5px;
+  text-transform: uppercase;
+  letter-spacing: .1em;
+  color: var(--ink-soft);
+  margin-bottom: 8px;
+}
+
+.metric-v {
+  font-size: 1.85rem;
+  font-weight: 750;
+  letter-spacing: -.03em;
+  line-height: 1.1;
+  font-variant-numeric: tabular-nums;
+}
+
+.metric-n { font-size: 12.5px; color: var(--ink-soft); line-height: 1.5; margin-top: 5px; }
+.metric-v.warn { color: var(--accent); }
+.metric-v.bad { color: var(--alarm); }
+
+/* ─── 섹션 ─────────────────────────────────────────────── */
+
+section { padding-top: 74px; }
+
+h2 {
+  font-size: clamp(1.6rem, 3.4vw, 2.15rem);
+  line-height: 1.28;
+  letter-spacing: -.03em;
+  font-weight: 780;
+  margin: 0 0 10px;
+  text-wrap: balance;
+}
+
+.h2-eyebrow {
+  font-family: var(--mono);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: .15em;
+  color: var(--ink-soft);
+  margin-bottom: 10px;
+  padding-top: 14px;
+  border-top: 1px solid var(--rule-strong);
+}
+
+.lede { font-size: 1.05rem; color: var(--ink-mid); max-width: 66ch; margin: 0 0 6px; }
+
+h3 {
+  font-size: 1.2rem;
+  font-weight: 700;
+  letter-spacing: -.02em;
+  margin: 46px 0 4px;
+  text-wrap: balance;
+}
+
+h4 {
+  font-size: .96rem;
+  font-weight: 700;
+  margin: 30px 0 2px;
+  color: var(--ink);
+}
+
+p { margin: 14px 0; }
+.prose p, .prose ul, .prose ol { max-width: 72ch; }
+
+ul, ol { padding-left: 22px; margin: 14px 0; }
+li { margin: 7px 0; }
+li::marker { color: var(--ink-soft); }
+
+strong { font-weight: 700; }
+em { font-style: normal; background: var(--accent-soft); padding: 1px 5px; border-radius: 2px; }
+
+code {
+  font-family: var(--mono);
+  font-size: .855em;
+  background: var(--panel);
+  border: 1px solid var(--rule);
+  padding: 1px 5px;
+  border-radius: 3px;
+  word-break: break-all;
+}
+
+a { color: var(--accent); text-underline-offset: 3px; }
+
+/* ─── 파이프라인 단계 ──────────────────────────────────── */
+
+.stage {
+  display: grid;
+  grid-template-columns: 62px minmax(0, 1fr);
+  gap: 0 20px;
+  padding: 34px 0 6px;
+  border-top: 1px solid var(--rule);
+}
+
+.stage:first-of-type { border-top: 2px solid var(--ink); }
+
+.stage-no {
+  font-family: var(--mono);
+  font-size: 1.5rem;
+  font-weight: 500;
+  color: var(--accent);
+  line-height: 1.3;
+  font-variant-numeric: tabular-nums;
+}
+
+.stage-body { min-width: 0; }
+.stage-body > h3 { margin-top: 0; }
+
+.stage-where {
+  font-family: var(--mono);
+  font-size: 11.5px;
+  color: var(--ink-soft);
+  margin: 4px 0 14px;
+  line-height: 1.7;
+}
+
+.stage-where b { color: var(--ink-mid); font-weight: 500; }
+
+@media (max-width: 620px) {
+  .stage { grid-template-columns: 1fr; gap: 0; }
+  .stage-no { font-size: 1.05rem; margin-bottom: 6px; }
+}
+
+/* ─── 노트 박스 ────────────────────────────────────────── */
+
+.note {
+  background: var(--panel);
+  border: 1px solid var(--rule);
+  border-left: 3px solid var(--rule-strong);
+  padding: 16px 20px;
+  margin: 20px 0;
+  font-size: .945rem;
+  line-height: 1.82;
+  max-width: 72ch;
+}
+
+.note-k {
+  font-family: var(--mono);
+  font-size: 10.5px;
+  text-transform: uppercase;
+  letter-spacing: .12em;
+  color: var(--ink-soft);
+  display: block;
+  margin-bottom: 7px;
+}
+
+.note p:first-of-type { margin-top: 0; }
+.note p:last-child { margin-bottom: 0; }
+.note.why { border-left-color: var(--accent); }
+.note.why .note-k { color: var(--accent); }
+.note.risk { border-left-color: var(--alarm); background: var(--alarm-soft); }
+.note.risk .note-k { color: var(--alarm); }
+
+/* ─── 표 ───────────────────────────────────────────────── */
+
+.scroll { overflow-x: auto; margin: 22px 0; border: 1px solid var(--rule); }
+
+table { border-collapse: collapse; width: 100%; font-size: .89rem; min-width: 520px; }
+
+th {
+  text-align: left;
+  font-family: var(--mono);
+  font-size: 10.5px;
+  text-transform: uppercase;
+  letter-spacing: .1em;
+  font-weight: 500;
+  color: var(--ink-soft);
+  padding: 11px 14px;
+  background: var(--panel);
+  border-bottom: 1px solid var(--rule-strong);
+  white-space: nowrap;
+}
+
+td {
+  padding: 11px 14px;
+  border-bottom: 1px solid var(--rule);
+  vertical-align: top;
+  line-height: 1.65;
+}
+
+tr:last-child td { border-bottom: none; }
+td.num { font-family: var(--mono); font-variant-numeric: tabular-nums; text-align: right; white-space: nowrap; }
+td.mono, th.mono { font-family: var(--mono); font-size: .82rem; }
+td.name { font-weight: 600; white-space: nowrap; }
+tbody tr:hover td { background: var(--panel); }
+
+/* ─── 상태 칩 ──────────────────────────────────────────── */
+
+.pill {
+  display: inline-block;
+  font-family: var(--mono);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: .09em;
+  padding: 2px 7px;
+  border-radius: 2px;
+  white-space: nowrap;
+  border: 1px solid transparent;
+}
+
+.pill.live { background: var(--live-soft); color: var(--live); border-color: var(--live); }
+.pill.dead { background: var(--dead-soft); color: var(--dead); border-color: var(--dead); }
+.pill.warn { background: var(--accent-soft); color: var(--accent); border-color: var(--accent); }
+.pill.alarm { background: var(--alarm-soft); color: var(--alarm); border-color: var(--alarm); }
+
+/* ─── 다이어그램 ───────────────────────────────────────── */
+
+figure { margin: 34px 0 14px; }
+
+.fig-frame {
+  overflow-x: auto;
+  border: 1px solid var(--rule);
+  background: var(--panel);
+  padding: 24px 20px;
+}
+
+figure svg {
+  display: block;
+  width: 100%;
+  height: auto;
+  min-width: 600px;
+  color: var(--ink);
+}
+
+figure svg text { font-family: var(--mono); fill: currentColor; }
+figure svg .t { font-size: 11.5px; }
+figure svg .t-b { font-size: 11.5px; font-weight: 600; }
+figure svg .t-sm { font-size: 10px; fill: var(--ink-soft); }
+figure svg .t-hd { font-size: 10px; letter-spacing: .11em; fill: var(--ink-soft); }
+figure svg .t-a { font-size: 11px; fill: var(--accent); }
+figure svg .t-big { font-size: 19px; font-weight: 700; }
+
+figure svg .bx { fill: var(--panel-2); stroke: var(--rule-strong); stroke-width: 1; }
+figure svg .bx-g { fill: var(--ground); stroke: var(--rule-strong); stroke-width: 1; }
+figure svg .bx-a { fill: var(--accent-soft); stroke: var(--accent); stroke-width: 1.3; }
+figure svg .bx-d { fill: none; stroke: var(--rule-strong); stroke-width: 1; stroke-dasharray: 4 4; }
+
+figure svg .ar { stroke: var(--rule-strong); stroke-width: 1.4; fill: none; }
+figure svg .ar-a { stroke: var(--accent); stroke-width: 1.8; fill: none; }
+figure svg .ar-d { stroke: var(--rule-strong); stroke-width: 1.2; fill: none; stroke-dasharray: 4 4; }
+figure svg .ar-ad { stroke: var(--accent); stroke-width: 1.4; fill: none; stroke-dasharray: 5 4; }
+
+figure svg .axis { stroke: var(--rule-strong); stroke-width: 1; }
+figure svg .grid { stroke: var(--rule-strong); stroke-width: 1; stroke-dasharray: 2 5; opacity: .7; }
+figure svg .curve { stroke: var(--accent); stroke-width: 2.2; fill: none; }
+
+figure svg .d1 { fill: var(--ink); }
+figure svg .d2 { fill: var(--ink-soft); }
+figure svg .d3 { fill: var(--ground); stroke: var(--ink-soft); stroke-width: 1.2; }
+figure svg .blob { fill: var(--panel-2); stroke: var(--rule-strong); stroke-width: 1; }
+figure svg .blob-a { fill: var(--accent-soft); stroke: var(--accent); stroke-width: 1.6; }
+
+figcaption {
+  font-size: 12.5px;
+  color: var(--ink-soft);
+  line-height: 1.75;
+  padding-top: 11px;
+  max-width: 70ch;
+}
+
+figcaption b { color: var(--ink-mid); font-weight: 600; }
+
+/* ─── 차트 (임계값 스윕) ───────────────────────────────────── */
+
+.chart-frame { position: relative; }
+
+figure svg .ln { fill: none; stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; }
+figure svg .ln-a { stroke: var(--sA); }
+figure svg .ln-b { stroke: var(--sB); }
+figure svg .ln-c { stroke: var(--sC); }
+figure svg .end-a { fill: var(--panel); stroke: var(--sA); stroke-width: 2; }
+figure svg .end-c { fill: var(--panel); stroke: var(--sC); stroke-width: 2; }
+figure svg .cross { stroke: var(--ink-soft); stroke-width: 1; stroke-dasharray: 3 3; }
+figure svg .hit { fill: transparent; }
+
+.chart-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 20px;
+  font-family: var(--mono);
+  font-size: 11.5px;
+  color: var(--ink-mid);
+  padding-bottom: 14px;
+}
+
+.chart-legend span { display: inline-flex; align-items: center; gap: 7px; }
+.chart-legend i { width: 15px; height: 3px; border-radius: 2px; display: inline-block; }
+
+.chart-tip {
+  position: absolute;
+  z-index: 2;
+  pointer-events: none;
+  background: var(--ground);
+  border: 1px solid var(--rule-strong);
+  box-shadow: var(--shadow);
+  padding: 9px 11px;
+  font-family: var(--mono);
+  font-size: 11.5px;
+  line-height: 1.65;
+  color: var(--ink);
+  white-space: nowrap;
+  transform: translate(-50%, 0);
+}
+
+.chart-tip b { display: block; color: var(--ink-soft); font-weight: 500; padding-bottom: 3px; }
+.chart-tip u { text-decoration: none; display: inline-block; width: 9px; }
+
+/* ─── 정정 배너 ────────────────────────────────────────── */
+
+.correction {
+  border: 2px solid var(--accent);
+  background: var(--accent-soft);
+  padding: 20px 24px;
+  margin: 30px 0;
+  max-width: 72ch;
+}
+
+.correction .note-k { color: var(--accent); }
+.correction p:last-child { margin-bottom: 0; }
+
+/* ─── 코드 블록 ────────────────────────────────────────── */
+
+pre {
+  font-family: var(--mono);
+  font-size: 12.5px;
+  line-height: 1.75;
+  background: var(--panel);
+  border: 1px solid var(--rule);
+  padding: 16px 18px;
+  overflow-x: auto;
+  margin: 20px 0;
+}
+
+pre code { background: none; border: none; padding: 0; font-size: inherit; }
+
+hr { border: none; border-top: 1px solid var(--rule); margin: 56px 0 0; }
+
+footer {
+  padding-top: 30px;
+  font-family: var(--mono);
+  font-size: 11.5px;
+  color: var(--ink-soft);
+  line-height: 1.8;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * { animation: none !important; transition: none !important; }
+}
+</style>
+
+<div class="shell">
+
+<nav class="rail" aria-label="목차">
+  <div class="rail-title">목차</div>
+  <a href="#summary">한눈에 보기</a>
+  <a href="#what">이 시스템이 하는 일</a>
+  <a href="#visual">그림으로 보는 흐름</a>
+  <a href="#live">지금 서빙되는 것</a>
+  <a href="#pipeline">전체 프로세스 10단계</a>
+  <a href="#loops">세 개의 루프</a>
+  <a href="#data">데이터 모델</a>
+  <a href="#surface">화면과 API</a>
+  <a href="#dead">죽은 코드</a>
+  <a href="#deaddata">죽은 데이터와 위험</a>
+  <a href="#experiment">검증한 대안</a>
+  <a href="#verify">직접 확인하는 법</a>
+</nav>
+
+<main>
+
+<header class="masthead">
+  <div class="eyebrow">전수 조사 · 2026-08-17</div>
+  <h1>TrendSys 파이프라인 해부</h1>
+  <p class="standfirst">
+    게임 게시판 글이 수집되어 카테고리에 담기고, 주제로 묶이고, 확산이 탐지되어
+    알림으로 나가기까지 — 실제로 돌고 있는 코드만 따라간 기록. 무엇이 서빙 중이고,
+    무엇이 죽어 있는지 함께 표시했다.
+  </p>
+  <div class="stamp">
+    <span>대상 <b>game-board-pipeline</b></span>
+    <span>백엔드 <b>4,374줄</b></span>
+    <span>프론트 <b>2,052줄</b></span>
+    <span>근거 <b>가동 중인 서버 /api/status + pipeline.db 실측</b></span>
+  </div>
+</header>
+
+<section id="summary">
+  <div class="h2-eyebrow">현황</div>
+  <h2>한눈에 보기</h2>
+  <p class="lede">조사 시점에 서버는 가동 중이었다 — <code>loop_running: true</code>,
+  분석 27회차. 아래 수치는 추정이 아니라 실행 중인 API와 데이터베이스에서 직접 읽은 값이다.</p>
+
+  <div class="metrics">
+    <div class="metric">
+      <div class="metric-k">수집 글</div>
+      <div class="metric-v">15,684</div>
+      <div class="metric-n">snr 15,540 · solo 144</div>
+    </div>
+    <div class="metric">
+      <div class="metric-k">운영 카테고리</div>
+      <div class="metric-v">7 <span style="font-size:.9rem;color:var(--ink-soft)">× 2게임</span></div>
+      <div class="metric-n">규칙 매핑으로 고정</div>
+    </div>
+    <div class="metric">
+      <div class="metric-k">살아있는 주제</div>
+      <div class="metric-v">144</div>
+      <div class="metric-n">전부 snr · solo는 0개</div>
+    </div>
+    <div class="metric">
+      <div class="metric-k">발송 판정</div>
+      <div class="metric-v">151</div>
+      <div class="metric-n">미발송 52 · 소강 64</div>
+    </div>
+    <div class="metric">
+      <div class="metric-k">이미지 캡션</div>
+      <div class="metric-v">1,931</div>
+      <div class="metric-n">첨부 보유 1,971건 중 98%</div>
+    </div>
+    <div class="metric">
+      <div class="metric-k">레거시 분석 행</div>
+      <div class="metric-v bad">9,643</div>
+      <div class="metric-n">재분석 불가 — 아래 참조</div>
+    </div>
+  </div>
+
+  <div class="correction">
+    <span class="note-k">먼저 짚을 것</span>
+    <p><strong>운영 중인 판단 모델은 어댑터가 아니라 머지된 모델이다.</strong>
+    <code>.env</code>의 <code>JUDGE_FUSED_PATH</code>가 채워져 있어
+    <code>gemma4-notify3-hf</code>가 단독으로 로드된다. 코드에 남아 있는
+    <code>judge_adapter_path</code>(adapters3)는 <code>judge.py:87</code> 분기의
+    else 쪽이라 현재 실행 경로에서 읽히지 않는다.</p>
+    <p>즉 <strong>런타임에 실제로 LoRA 어댑터가 붙는 곳은 adapters4 하나뿐</strong>이다.
+    adapters3는 머지되어 모델 가중치 안으로 흡수됐다.</p>
+  </div>
+</section>
+
+<section id="what">
+  <div class="h2-eyebrow">배경</div>
+  <h2>이 시스템이 하는 일</h2>
+
+  <div class="prose">
+    <p>디시인사이드 갤러리에 글이 올라온다. 하루 수백에서 수천 건이다. 운영팀이 전부
+    읽을 수는 없다. 그런데 그중 극히 일부는 <strong>지금 당장 알아야 하는 일</strong>이다 —
+    결제가 먹통이거나, 서버가 터졌거나, 방금 나온 캐릭터 성능에 여론이 폭발했거나.</p>
+
+    <p>TrendSys는 그 극히 일부를 찾아내는 기계다. 하는 일을 한 문장으로 줄이면
+    이렇다. <em>글을 모아 → 비슷한 것끼리 묶고 → 어느 묶음이 갑자기 커지는지 보고 →
+    그게 알릴 만한 일인지 판단해 → 알린다.</em></p>
+
+    <h3>두 개의 서랍장이 따로 돈다</h3>
+
+    <p>이 시스템을 이해할 때 가장 먼저 잡아야 할 것은, 글을 담는 통이
+    <strong>두 종류</strong>이고 서로 다른 원리로 만들어진다는 점이다. 이걸 섞어서 보면
+    코드가 이해되지 않는다.</p>
+
+    <div class="scroll">
+      <table>
+        <thead>
+          <tr><th></th><th>카테고리</th><th>주제</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td class="name">비유</td>
+            <td>서랍장의 <b>큰 칸</b> — "밸런스", "버그"</td>
+            <td>그 안의 <b>낱개 사건</b> — "8/15 길드전 매칭 오류"</td>
+          </tr>
+          <tr>
+            <td class="name">누가 정하나</td>
+            <td><b>LLM</b>이 글을 읽고 판정</td>
+            <td><b>벡터</b>가 수학적으로 묶음</td>
+          </tr>
+          <tr>
+            <td class="name">개수</td>
+            <td>7개 고정</td>
+            <td>가변 — 지금 144개</td>
+          </tr>
+          <tr>
+            <td class="name">수명</td>
+            <td>영구 — 한 번 정해지면 안 바뀜</td>
+            <td>사건이 끝나면 창에서 사라짐</td>
+          </tr>
+          <tr>
+            <td class="name">언제 계산</td>
+            <td>글 도착할 때 <b>딱 한 번</b></td>
+            <td><b>매 60초 전체 재계산</b></td>
+          </tr>
+          <tr>
+            <td class="name">쓰임새</td>
+            <td>화면 표시, 점수 추이 그래프</td>
+            <td><b>버스트 · 요약 · 알림 판단의 단위</b></td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <p>알림은 <strong>주제</strong>에서만 나간다. 카테고리는 "밸런스 얘기가 요새 많네"를
+    보여줄 뿐, 그 자체로는 알림이 되지 않는다. "밸런스"라는 큰 칸이 커지는 건 평범한
+    일이지만, 그 안의 "루디 각성 성능 논란"이라는 낱개 사건이 30분 만에 60건으로
+    부푸는 건 사건이기 때문이다.</p>
+
+    <h3>왜 하나로 안 하고 둘로 나눴나</h3>
+
+    <p>둘 다 해봤고, 둘 다 실패했기 때문이다. 카테고리를 벡터로 정하려 했을 때
+    (2026-07-05 실측) 글과 자기 카테고리 중심의 유사도가 <b>0.661</b>, 남의 카테고리
+    중심과는 <b>0.653</b>으로 갈리지 않았다. 어떤 임계값을 잡아도 통과율과 오배정률이
+    같이 움직였다. 대분류는 기하학으로 판정할 수 있는 문제가 아니었다.</p>
+
+    <p>반대로 주제를 LLM으로 정하려 하면 매분 수백 건을 호출해야 해서 물리적으로
+    불가능하다. 그래서 <strong>큰 칸은 LLM이, 낱개 사건은 벡터가</strong> 맡는 지금의
+    분업이 남았다.</p>
+  </div>
+</section>
+
+<section id="visual">
+  <div class="h2-eyebrow">그림</div>
+  <h2>그림으로 보는 흐름</h2>
+  <p class="lede">여기까지가 말로 한 설명이다. 이제 같은 내용을 그림으로 본다.
+  다섯 장이면 이 시스템의 작동 원리가 전부 들어간다.</p>
+
+  <h3>1 · 글 한 건이 지나가는 길</h3>
+  <p class="prose">가장 먼저 잡아야 할 그림이다. 글 하나가 들어오면 정거장을 차례로
+  지나가는데, <b>정거장마다 새 정보가 하나씩 달라붙는다.</b> 아래쪽 막대가 그
+  정보들이다. 막대가 시작되는 지점이 "그 값이 만들어지는 순간"이다.</p>
+
+  <figure>
+    <div class="fig-frame">
+      <svg viewBox="0 0 920 372" role="img"
+           aria-label="글 한 건이 수집·전처리·임베딩·분석·카테고리·주제묶기·판단 정거장을 지나며 정보가 하나씩 누적되는 그림">
+        <defs>
+          <marker id="a1" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="5.5"
+                  markerHeight="5.5" orient="auto-start-reverse">
+            <path d="M0 0 L10 5 L0 10 z" fill="currentColor" />
+          </marker>
+        </defs>
+
+        <text class="t-hd" x="20" y="17">수집 루프 · 60초</text>
+        <text class="t-hd" x="395" y="17">Gemma 워커 · 20초</text>
+        <text class="t-hd" x="645" y="17">수집 루프 · 60초</text>
+        <rect class="bx" x="20" y="24" width="360" height="6" />
+        <rect class="bx-a" x="395" y="24" width="235" height="6" />
+        <rect class="bx" x="645" y="24" width="235" height="6" />
+
+        <rect class="bx-g" x="20" y="42" width="110" height="36" />
+        <text class="t" x="75" y="65" text-anchor="middle">수집</text>
+        <rect class="bx-g" x="145" y="42" width="110" height="36" />
+        <text class="t" x="200" y="65" text-anchor="middle">전처리</text>
+        <rect class="bx-g" x="270" y="42" width="110" height="36" />
+        <text class="t" x="325" y="65" text-anchor="middle">임베딩</text>
+        <rect class="bx-g" x="395" y="42" width="110" height="36" />
+        <text class="t" x="450" y="65" text-anchor="middle">분석</text>
+        <rect class="bx-g" x="520" y="42" width="110" height="36" />
+        <text class="t" x="575" y="65" text-anchor="middle">카테고리</text>
+        <rect class="bx-g" x="645" y="42" width="110" height="36" />
+        <text class="t" x="700" y="65" text-anchor="middle">주제 묶기</text>
+        <rect class="bx-g" x="770" y="42" width="110" height="36" />
+        <text class="t" x="825" y="65" text-anchor="middle">판단 · 알림</text>
+
+        <path class="ar" d="M130 60 H141" marker-end="url(#a1)" style="color: var(--rule-strong)" />
+        <path class="ar" d="M255 60 H266" marker-end="url(#a1)" style="color: var(--rule-strong)" />
+        <path class="ar" d="M380 60 H391" marker-end="url(#a1)" style="color: var(--rule-strong)" />
+        <path class="ar" d="M505 60 H516" marker-end="url(#a1)" style="color: var(--rule-strong)" />
+        <path class="ar" d="M630 60 H641" marker-end="url(#a1)" style="color: var(--rule-strong)" />
+        <path class="ar" d="M755 60 H766" marker-end="url(#a1)" style="color: var(--rule-strong)" />
+
+        <path class="grid" d="M20 82 V352" /><path class="grid" d="M145 82 V352" />
+        <path class="grid" d="M270 82 V352" /><path class="grid" d="M395 82 V352" />
+        <path class="grid" d="M520 82 V352" /><path class="grid" d="M645 82 V352" />
+        <path class="grid" d="M770 82 V352" />
+
+        <text class="t-hd" x="20" y="104">글에 달라붙는 정보</text>
+
+        <rect class="bx" x="20" y="118" width="860" height="18" />
+        <text class="t-sm" x="29" y="131">제목 · 본문 — 원본 그대로</text>
+        <rect class="bx" x="145" y="144" width="735" height="18" />
+        <text class="t-sm" x="154" y="157">text — 은어를 풀고 URL·태그를 지운 정제 텍스트</text>
+        <rect class="bx" x="270" y="170" width="610" height="18" />
+        <text class="t-sm" x="279" y="183">embedding — 1024개의 숫자 (KURE-v1)</text>
+        <rect class="bx-d" x="270" y="196" width="610" height="18" />
+        <text class="t-sm" x="279" y="209">caption — 첨부 이미지가 있는 글만 · 별도 워커가 나중에 채움</text>
+        <rect class="bx" x="395" y="222" width="485" height="18" />
+        <text class="t-sm" x="404" y="235">major · 주제문구 · 감성 — adapters4가 한 줄로 출력</text>
+        <rect class="bx" x="520" y="248" width="360" height="18" />
+        <text class="t-sm" x="529" y="261">category_id — 위 major를 표로 옮긴 값 · 7개 중 하나 · 영구</text>
+        <rect class="bx-a" x="645" y="274" width="235" height="18" />
+        <text class="t-sm" x="654" y="287">topic_id — 매분 처음부터 다시 계산</text>
+        <rect class="bx-a" x="770" y="300" width="110" height="18" />
+        <text class="t-sm" x="779" y="313">heat · 판정</text>
+
+        <text class="t-sm" x="20" y="345">왼쪽 다섯 칸은 글마다 딱 한 번 계산하고 저장한다.
+          오른쪽 두 칸만 60초마다 새로 계산한다.</text>
+      </svg>
+    </div>
+    <figcaption>글 한 건이 지나는 일곱 정거장과, 각 정거장에서 붙는 정보.
+    <b>막대가 길수록 오래 남는 값</b>이다 — 임베딩과 카테고리는 한 번 정해지면 그대로 가고,
+    주제와 열기만 매분 새로 계산된다. 위쪽 띠는 그 구간을 어느 루프가 담당하는지 나타낸다.</figcaption>
+  </figure>
+
+  <h3>2 · 왜 서랍이 두 개인가</h3>
+  <p class="prose">앞에서 카테고리와 주제가 다르다고 했는데, 그림으로 보면 한 번에
+  이해된다. <b>같은 글 더미를 두 가지 기준으로 동시에 나눈다.</b> 왼쪽은 색(무슨 종류의
+  글인가), 오른쪽은 자리(무슨 사건 얘기인가)로 나눈 것이다.</p>
+
+  <figure>
+    <div class="fig-frame">
+      <svg viewBox="0 0 920 392" role="img"
+           aria-label="같은 24시간 글 더미를 왼쪽은 카테고리 7개 상자로, 오른쪽은 주제 덩어리로 동시에 나누는 그림">
+        <defs>
+          <marker id="a2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6"
+                  markerHeight="6" orient="auto-start-reverse">
+            <path d="M0 0 L10 5 L0 10 z" fill="currentColor" />
+          </marker>
+        </defs>
+
+        <text class="t-hd" x="310" y="22">최근 24시간 창의 글</text>
+        <rect class="bx-g" x="310" y="30" width="300" height="86" />
+        <circle class="d1" cx="330" cy="52" r="4.5" /><circle class="d3" cx="360" cy="52" r="4.5" />
+        <circle class="d2" cx="390" cy="52" r="4.5" /><circle class="d3" cx="420" cy="52" r="4.5" />
+        <circle class="d1" cx="450" cy="52" r="4.5" /><circle class="d3" cx="480" cy="52" r="4.5" />
+        <circle class="d2" cx="510" cy="52" r="4.5" /><circle class="d3" cx="540" cy="52" r="4.5" />
+        <circle class="d1" cx="570" cy="52" r="4.5" />
+        <circle class="d3" cx="330" cy="73" r="4.5" /><circle class="d2" cx="360" cy="73" r="4.5" />
+        <circle class="d1" cx="390" cy="73" r="4.5" /><circle class="d3" cx="420" cy="73" r="4.5" />
+        <circle class="d1" cx="450" cy="73" r="4.5" /><circle class="d2" cx="480" cy="73" r="4.5" />
+        <circle class="d3" cx="510" cy="73" r="4.5" /><circle class="d1" cx="540" cy="73" r="4.5" />
+        <circle class="d3" cx="570" cy="73" r="4.5" />
+        <circle class="d2" cx="330" cy="94" r="4.5" /><circle class="d3" cx="360" cy="94" r="4.5" />
+        <circle class="d1" cx="390" cy="94" r="4.5" /><circle class="d3" cx="420" cy="94" r="4.5" />
+        <circle class="d2" cx="450" cy="94" r="4.5" /><circle class="d1" cx="480" cy="94" r="4.5" />
+        <circle class="d3" cx="510" cy="94" r="4.5" /><circle class="d3" cx="540" cy="94" r="4.5" />
+        <circle class="d1" cx="570" cy="94" r="4.5" />
+
+        <path class="ar" d="M340 116 C300 140 258 144 228 160" marker-end="url(#a2)"
+              style="color: var(--rule-strong)" />
+        <path class="ar" d="M580 116 C620 140 662 144 692 160" marker-end="url(#a2)"
+              style="color: var(--rule-strong)" />
+
+        <text class="t-b" x="20" y="166">카테고리 — 색으로 나눈다</text>
+        <text class="t-sm" x="20" y="182">LLM이 글을 읽고 판정 · 7개 고정 · 한 번 정하면 영구</text>
+        <rect class="bx-g" x="36" y="194" width="118" height="152" />
+        <text class="t-sm" x="95" y="212" text-anchor="middle">밸런스</text>
+        <circle class="d1" cx="66" cy="238" r="4.5" /><circle class="d1" cx="95" cy="238" r="4.5" />
+        <circle class="d1" cx="124" cy="238" r="4.5" /><circle class="d1" cx="66" cy="264" r="4.5" />
+        <circle class="d1" cx="95" cy="264" r="4.5" /><circle class="d1" cx="124" cy="264" r="4.5" />
+        <circle class="d1" cx="66" cy="290" r="4.5" /><circle class="d1" cx="95" cy="290" r="4.5" />
+        <circle class="d1" cx="124" cy="290" r="4.5" />
+        <rect class="bx-g" x="170" y="194" width="118" height="152" />
+        <text class="t-sm" x="229" y="212" text-anchor="middle">버그·오류</text>
+        <circle class="d2" cx="200" cy="238" r="4.5" /><circle class="d2" cx="229" cy="238" r="4.5" />
+        <circle class="d2" cx="258" cy="238" r="4.5" /><circle class="d2" cx="200" cy="264" r="4.5" />
+        <circle class="d2" cx="229" cy="264" r="4.5" /><circle class="d2" cx="258" cy="264" r="4.5" />
+        <rect class="bx-g" x="304" y="194" width="126" height="152" />
+        <text class="t-sm" x="367" y="212" text-anchor="middle">일반·잡담</text>
+        <circle class="d3" cx="337" cy="238" r="4.5" /><circle class="d3" cx="366" cy="238" r="4.5" />
+        <circle class="d3" cx="395" cy="238" r="4.5" /><circle class="d3" cx="337" cy="264" r="4.5" />
+        <circle class="d3" cx="366" cy="264" r="4.5" /><circle class="d3" cx="395" cy="264" r="4.5" />
+        <circle class="d3" cx="337" cy="290" r="4.5" /><circle class="d3" cx="366" cy="290" r="4.5" />
+        <circle class="d3" cx="395" cy="290" r="4.5" /><circle class="d3" cx="337" cy="316" r="4.5" />
+        <circle class="d3" cx="366" cy="316" r="4.5" /><circle class="d3" cx="395" cy="316" r="4.5" />
+
+        <text class="t-b" x="490" y="166">주제 — 자리로 나눈다</text>
+        <text class="t-sm" x="490" y="182">벡터가 계산 · 개수 가변 · 60초마다 다시 나눔</text>
+        <ellipse class="blob" cx="565" cy="248" rx="62" ry="42" />
+        <text class="t-sm" x="565" y="204" text-anchor="middle">주제 A</text>
+        <circle class="d1" cx="540" cy="235" r="4.5" /><circle class="d3" cx="568" cy="231" r="4.5" />
+        <circle class="d2" cx="592" cy="245" r="4.5" /><circle class="d3" cx="548" cy="261" r="4.5" />
+        <circle class="d1" cx="575" cy="258" r="4.5" /><circle class="d3" cx="598" cy="265" r="4.5" />
+        <ellipse class="blob-a" cx="730" cy="296" rx="78" ry="50" />
+        <text class="t-a" x="730" y="240" text-anchor="middle">주제 B — 버스트</text>
+        <circle class="d2" cx="700" cy="278" r="4.5" /><circle class="d1" cx="728" cy="274" r="4.5" />
+        <circle class="d3" cx="756" cy="284" r="4.5" /><circle class="d3" cx="690" cy="298" r="4.5" />
+        <circle class="d1" cx="718" cy="301" r="4.5" /><circle class="d2" cx="748" cy="306" r="4.5" />
+        <circle class="d3" cx="776" cy="298" r="4.5" /><circle class="d1" cx="706" cy="321" r="4.5" />
+        <circle class="d3" cx="736" cy="324" r="4.5" /><circle class="d3" cx="764" cy="318" r="4.5" />
+        <ellipse class="blob" cx="862" cy="232" rx="42" ry="32" />
+        <text class="t-sm" x="862" y="192" text-anchor="middle">주제 C</text>
+        <circle class="d3" cx="845" cy="222" r="4.5" /><circle class="d1" cx="868" cy="219" r="4.5" />
+        <circle class="d2" cx="852" cy="242" r="4.5" /><circle class="d3" cx="876" cy="241" r="4.5" />
+
+        <text class="t-sm" x="490" y="368">6건을 못 채운 글은 어느 덩어리에도 안 들어간다</text>
+        <text class="t-sm" x="20" y="368">글 한 건은 왼쪽 상자와 오른쪽 덩어리에 동시에 속한다</text>
+        <text class="t-a" x="490" y="384">알림은 오른쪽에서만 나간다</text>
+      </svg>
+    </div>
+    <figcaption>같은 글 더미를 나누는 두 가지 방식. 왼쪽 상자 안은 색이 통일돼 있고
+    (같은 종류의 글), 오른쪽 덩어리 안은 색이 섞여 있다 (종류는 달라도 같은 사건 얘기).
+    <b>"밸런스 글이 많다"는 평범한 일이고, "이 사건 얘기가 30분 만에 부풀었다"가
+    사건이다.</b> 그래서 알림은 오른쪽에서만 나간다.</figcaption>
+  </figure>
+
+  <h3>3 · 주제를 묶는 계산 — 정규화 한 줄의 차이</h3>
+  <p class="prose">이 시스템에서 가장 이해하기 어려운 부분이자, 가장 중요한 설계다.
+  글은 1024차원 벡터, 즉 <b>길이가 1인 화살표</b>다. 그룹의 대표 화살표를 만들 때
+  <b>길이를 1로 되돌리느냐 마느냐</b>가 시스템 전체의 운명을 갈랐다.</p>
+
+  <figure>
+    <div class="fig-frame">
+      <svg viewBox="0 0 920 344" role="img"
+           aria-label="조밀한 그룹은 평균 화살표가 길고 잡탕 그룹은 짧아지며, 정규화하면 짧아진 것이 원래 길이로 복원되어 눈덩이가 생긴다는 비교 그림">
+        <defs>
+          <marker id="a3" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="5"
+                  markerHeight="5" orient="auto-start-reverse">
+            <path d="M0 0 L10 5 L0 10 z" fill="currentColor" />
+          </marker>
+        </defs>
+
+        <text class="t-b" x="150" y="34" text-anchor="middle">조밀한 그룹</text>
+        <text class="t-sm" x="150" y="52" text-anchor="middle">멤버들이 같은 방향을 본다</text>
+        <path class="ar" d="M100 260 L199.6 176.4" marker-end="url(#a3)" style="color: var(--rule-strong)" />
+        <path class="ar" d="M100 260 L183.6 160.4" marker-end="url(#a3)" style="color: var(--rule-strong)" />
+        <path class="ar" d="M100 260 L165 147.4" marker-end="url(#a3)" style="color: var(--rule-strong)" />
+        <path class="ar" d="M100 260 L144.5 137.8" marker-end="url(#a3)" style="color: var(--rule-strong)" />
+        <path class="ar-a" d="M100 260 L172.3 156.7" marker-end="url(#a3)" style="color: var(--accent)" />
+        <circle class="d1" cx="100" cy="260" r="4" />
+        <text class="t-a" x="212" y="182">평균의 길이 = 0.97</text>
+        <text class="t-sm" x="212" y="198">→ 내적이 커서 새 글이 잘 붙는다</text>
+
+        <text class="t-b" x="560" y="34" text-anchor="middle">잡탕 그룹</text>
+        <text class="t-sm" x="560" y="52" text-anchor="middle">멤버들이 제각각을 본다</text>
+        <path class="ar" d="M520 260 L648 237.4" marker-end="url(#a3)" style="color: var(--rule-strong)" />
+        <path class="ar" d="M520 260 L611.9 168.1" marker-end="url(#a3)" style="color: var(--rule-strong)" />
+        <path class="ar" d="M520 260 L531.3 130.5" marker-end="url(#a3)" style="color: var(--rule-strong)" />
+        <path class="ar" d="M520 260 L436.4 160.4" marker-end="url(#a3)" style="color: var(--rule-strong)" />
+        <path class="ar-ad" d="M546.6 198.2 L571.4 140.5" marker-end="url(#a3)" style="color: var(--accent)" />
+        <path class="ar-a" d="M520 260 L546.6 198.2" marker-end="url(#a3)" style="color: var(--accent)" />
+        <circle class="d1" cx="520" cy="260" r="4" />
+        <text class="t-a" x="600" y="212">평균의 길이 = 0.72</text>
+        <text class="t-sm" x="600" y="228">→ 내적이 작아 붙기 어렵다</text>
+        <text class="t-sm" x="586" y="126">정규화하면 여기까지 되돌아간다</text>
+        <text class="t-sm" x="586" y="140">= 구버전이 눈덩이가 된 이유</text>
+
+        <rect class="bx" x="20" y="288" width="880" height="44" />
+        <text class="t" x="38" y="306">그룹 대표 = 멤버 화살표들의 평균 (길이를 되돌리지 않는다)</text>
+        <text class="t-sm" x="38" y="323">→ 새 글과의 내적이 곧 "멤버 전원과의 평균 유사도"가 되고, 잡탕일수록 평균이 짧아져 스스로 문을 닫는다</text>
+      </svg>
+    </div>
+    <figcaption>같은 4개 멤버라도 방향이 흩어지면 평균 화살표가 짧아진다. 짧아진 만큼
+    새 글이 붙기 어려워지므로 <b>잡탕 그룹은 스스로 자라기를 멈춘다.</b> 그런데 예전 코드는
+    이 평균을 다시 길이 1로 늘였고(주황 점선), 그 결과 잡탕 그룹이 "누구에게나 어중간하게
+    가까운 허브"가 되어 무한정 커졌다 — 멤버끼리 유사도가 0.577인 156건짜리 덩어리.</figcaption>
+  </figure>
+
+  <h3>4 · 어제의 그 주제인지 알아보는 법</h3>
+  <p class="prose">주제는 매분 처음부터 다시 묶인다. 그러면 "어제부터 있던 그 주제"와
+  "방금 만들어진 그룹"을 어떻게 잇는가? 중심 화살표끼리 비교해 짝을 짓는데,
+  <b>반드시 일대일</b>이어야 한다.</p>
+
+  <figure>
+    <div class="fig-frame">
+      <svg viewBox="0 0 920 262" role="img"
+           aria-label="다대일 매칭을 허용하면 두 그룹이 한 주제로 재결합되지만 일대일을 강제하면 밀린 그룹이 새 주제로 분리된다는 비교 그림">
+        <defs>
+          <marker id="a4" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6"
+                  markerHeight="6" orient="auto-start-reverse">
+            <path d="M0 0 L10 5 L0 10 z" fill="currentColor" />
+          </marker>
+        </defs>
+
+        <text class="t-b" x="215" y="30" text-anchor="middle">다대일을 허용하면</text>
+        <rect class="bx-g" x="30" y="66" width="100" height="34" />
+        <text class="t" x="80" y="88" text-anchor="middle">그룹 A</text>
+        <rect class="bx-g" x="30" y="146" width="100" height="34" />
+        <text class="t" x="80" y="168" text-anchor="middle">그룹 B</text>
+        <rect class="bx-g" x="270" y="106" width="120" height="34" />
+        <text class="t" x="330" y="128" text-anchor="middle">기존 주제 ①</text>
+        <path class="ar" d="M130 83 C190 83 215 108 266 116" marker-end="url(#a4)"
+              style="color: var(--rule-strong)" />
+        <path class="ar" d="M130 163 C190 163 215 140 266 131" marker-end="url(#a4)"
+              style="color: var(--rule-strong)" />
+        <text class="t-sm" x="176" y="76">0.91</text>
+        <text class="t-sm" x="176" y="180">0.88</text>
+        <text class="t-sm" x="215" y="212" text-anchor="middle">①이 A와 B를 한꺼번에 삼킨다</text>
+        <text class="t-sm" x="215" y="230" text-anchor="middle">→ 벡터가 갈라놓은 것이 도로 붙는다</text>
+
+        <text class="t-b" x="695" y="30" text-anchor="middle">일대일로 강제하면 (현재)</text>
+        <rect class="bx-g" x="500" y="66" width="100" height="34" />
+        <text class="t" x="550" y="88" text-anchor="middle">그룹 A</text>
+        <rect class="bx-g" x="500" y="146" width="100" height="34" />
+        <text class="t" x="550" y="168" text-anchor="middle">그룹 B</text>
+        <rect class="bx-g" x="740" y="66" width="140" height="34" />
+        <text class="t" x="810" y="88" text-anchor="middle">기존 주제 ①</text>
+        <rect class="bx-a" x="740" y="146" width="140" height="34" />
+        <text class="t" x="810" y="168" text-anchor="middle">새 주제 ②</text>
+        <path class="ar-a" d="M600 83 H736" marker-end="url(#a4)" style="color: var(--accent)" />
+        <text class="t-a" x="668" y="74" text-anchor="middle">0.91 · 1순위로 확정</text>
+        <path class="ar-d" d="M600 158 C650 152 680 118 736 100" marker-end="url(#a4)"
+              style="color: var(--rule-strong)" />
+        <text class="t-sm" x="662" y="128">0.88 — ①은 이미 찼다</text>
+        <path class="ar" d="M600 170 H736" marker-end="url(#a4)" style="color: var(--rule-strong)" />
+        <text class="t-sm" x="668" y="190" text-anchor="middle">밀려서 새 주제로</text>
+        <text class="t-sm" x="695" y="230" text-anchor="middle">유사도가 높은 짝부터 확정하고, 쓴 것은 다시 쓰지 않는다</text>
+      </svg>
+    </div>
+    <figcaption>모든 (그룹 × 기존 주제) 조합의 유사도를 내림차순으로 훑으며 짝을 짓되,
+    <b>한 번 쓴 그룹과 주제는 건너뛴다.</b> 이 규칙이 없으면 "아리스 장비 / 아리스 성능 /
+    방덱 메타"처럼 애써 갈라놓은 그룹들이 매 사이클 하나로 재결합됐다.</figcaption>
+  </figure>
+
+  <h3>5 · 왜 글 수를 세지 않고 '열기'를 재는가</h3>
+  <p class="prose">마지막 그림이다. 관제는 "많이 쌓였나"가 아니라 <b>"지금 뜨거운가"</b>를
+  봐야 한다. 그래서 글마다 나이에 따라 가중치를 주고 더한다.</p>
+
+  <figure>
+    <div class="fig-frame">
+      <svg viewBox="0 0 920 292" role="img"
+           aria-label="글의 가중치가 30분마다 반으로 줄어드는 곡선과, 그로 인해 오래된 100건보다 최근 20건의 열기가 훨씬 높다는 비교">
+        <defs>
+          <marker id="a5" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="5.5"
+                  markerHeight="5.5" orient="auto-start-reverse">
+            <path d="M0 0 L10 5 L0 10 z" fill="currentColor" />
+          </marker>
+        </defs>
+
+        <text class="t-b" x="60" y="28">가중치는 30분마다 반으로</text>
+        <path class="grid" d="M70 70 H434" /><path class="grid" d="M70 155 H434" />
+        <path class="grid" d="M70 197 H434" />
+        <text class="t-sm" x="62" y="74" text-anchor="end">1.0</text>
+        <text class="t-sm" x="62" y="159" text-anchor="end">0.5</text>
+        <text class="t-sm" x="62" y="201" text-anchor="end">0.25</text>
+        <path class="axis" d="M70 60 V240" /><path class="axis" d="M70 240 H434" />
+        <polyline class="curve" points="70,70 99,120 128,155 158,180 187,198 216,210 245,219
+          274,225 303,229 332,232 361,235 420,237" />
+        <circle cx="70" cy="70" r="4" fill="var(--accent)" />
+        <circle cx="128" cy="155" r="4" fill="var(--accent)" />
+        <circle cx="187" cy="198" r="4" fill="var(--accent)" />
+        <circle cx="245" cy="219" r="4" fill="var(--accent)" />
+        <text class="t-sm" x="70" y="258" text-anchor="middle">방금</text>
+        <text class="t-sm" x="128" y="258" text-anchor="middle">30분</text>
+        <text class="t-sm" x="187" y="258" text-anchor="middle">60분</text>
+        <text class="t-sm" x="245" y="258" text-anchor="middle">90분</text>
+        <text class="t-sm" x="420" y="258" text-anchor="middle">3시간</text>
+        <text class="t-sm" x="70" y="280">글 하나가 열기에 보태는 몫</text>
+
+        <text class="t-b" x="520" y="28">그래서 같은 글이라도 이렇게 갈린다</text>
+        <path class="ar-ad" d="M880 66 V232" style="color: var(--accent)" />
+        <text class="t-a" x="880" y="56" text-anchor="middle">지금</text>
+
+        <text class="t" x="520" y="96">A · 3시간 전에 100건</text>
+        <path class="axis" d="M520 130 H880" />
+        <circle class="d2" cx="548" cy="112" r="3.5" /><circle class="d2" cx="563" cy="112" r="3.5" />
+        <circle class="d2" cx="578" cy="112" r="3.5" /><circle class="d2" cx="593" cy="112" r="3.5" />
+        <circle class="d2" cx="608" cy="112" r="3.5" /><circle class="d2" cx="548" cy="122" r="3.5" />
+        <circle class="d2" cx="563" cy="122" r="3.5" /><circle class="d2" cx="578" cy="122" r="3.5" />
+        <circle class="d2" cx="593" cy="122" r="3.5" /><circle class="d2" cx="608" cy="122" r="3.5" />
+        <text class="t-sm" x="880" y="150" text-anchor="end">열기 ≈ 1.6 — 사실상 꺼진 불</text>
+
+        <text class="t" x="520" y="180">B · 최근 30분에 20건</text>
+        <path class="axis" d="M520 214 H880" />
+        <circle class="d1" cx="826" cy="196" r="3.5" /><circle class="d1" cx="838" cy="196" r="3.5" />
+        <circle class="d1" cx="850" cy="196" r="3.5" /><circle class="d1" cx="862" cy="196" r="3.5" />
+        <circle class="d1" cx="874" cy="196" r="3.5" /><circle class="d1" cx="826" cy="206" r="3.5" />
+        <circle class="d1" cx="838" cy="206" r="3.5" /><circle class="d1" cx="850" cy="206" r="3.5" />
+        <circle class="d1" cx="862" cy="206" r="3.5" /><circle class="d1" cx="874" cy="206" r="3.5" />
+        <text class="t-a" x="880" y="234" text-anchor="end">열기 ≈ 14.1 — 지금 타고 있다</text>
+        <text class="t-sm" x="520" y="280">글 수는 A가 5배 많지만, 관제가 봐야 하는 것은 B다</text>
+      </svg>
+    </div>
+    <figcaption>글의 나이에 따라 가중치를 반감시키면(반감기 30분) <b>지금 살아 있는
+    대화의 크기</b>가 나온다. 여기에 "최근 60분 글이 5건 이상"이라는 절대 조건을
+    함께 걸어야 버스트로 인정된다 — 비율만 보면 평소 0건이던 주제에 2건만 와도
+    무한대 배수가 나오기 때문이다.</figcaption>
+  </figure>
+</section>
+
+<section id="live">
+  <div class="h2-eyebrow">프로덕션</div>
+  <h2>지금 서빙되는 것</h2>
+  <p class="lede">중요한 함정이 하나 있다. <code>app/config.py</code>의 기본값을 읽으면
+  이 시스템이 거의 다 stub인 것처럼 보인다. 실제로는 <code>.env</code>가 전부 덮어쓰고
+  있다. 아래는 가동 중인 서버의 <code>/api/status</code> 응답에서 그대로 옮긴 것이다.</p>
+
+  <div class="scroll">
+    <table>
+      <thead>
+        <tr><th>슬롯</th><th>config.py 기본값</th><th>실제 라이브</th><th>상태</th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td class="name">수집</td>
+          <td class="mono">dcinside</td>
+          <td class="mono">dcinside.db 증분 (읽기 전용)</td>
+          <td><span class="pill live">가동</span></td>
+        </tr>
+        <tr>
+          <td class="name">캡션</td>
+          <td class="mono">mlx-vlm</td>
+          <td class="mono">mlx-vlm · gemma-4-e4b-it-qat-4bit</td>
+          <td><span class="pill live">가동</span></td>
+        </tr>
+        <tr>
+          <td class="name">임베딩</td>
+          <td class="mono">stub / 768차원</td>
+          <td class="mono"><b>nlpai-lab/KURE-v1 · 1024차원</b></td>
+          <td><span class="pill live">가동</span></td>
+        </tr>
+        <tr>
+          <td class="name">카테고리</td>
+          <td class="mono">(벡터+기본형 레거시)</td>
+          <td class="mono"><b>adapters4 규칙 매핑</b></td>
+          <td><span class="pill live">가동</span></td>
+        </tr>
+        <tr>
+          <td class="name">클러스터링</td>
+          <td class="mono">stub / mcs=5</td>
+          <td class="mono"><b>HDBSCAN · min_cluster_size=10</b></td>
+          <td><span class="pill live">안전망</span></td>
+        </tr>
+        <tr>
+          <td class="name">요약</td>
+          <td class="mono">stub (추출식)</td>
+          <td class="mono"><b>MLX 생성 요약</b></td>
+          <td><span class="pill live">가동</span></td>
+        </tr>
+        <tr>
+          <td class="name">판단</td>
+          <td class="mono">베이스 + adapters3</td>
+          <td class="mono"><b>gemma4-notify3-hf (머지)</b></td>
+          <td><span class="pill live">가동</span></td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="note risk">
+    <span class="note-k">문서 불일치</span>
+    <p><code>README.md</code>는 요약 슬롯을 "🔶 stub 추출식 / 미준비"로 적고 있으나
+    실제로는 MLX 생성 요약이 돌고 있다. 임베딩도 README 상단은 KURE-v1이라 맞게
+    적혀 있지만 본문 표에는 "EmbeddingGemma"로 남아 있고, <code>config.py</code>의
+    <code>embedding_dim: 768</code>은 실제 1024차원과 어긋난다(이 값은 stub 전용이라
+    동작에는 영향 없음). 코드 기본값과 README를 신뢰하지 말고
+    <code>/api/status</code>를 신뢰할 것.</p>
+  </div>
+
+  <h3>메모리에 올라가는 모델은 네 덩어리</h3>
+
+  <p class="prose">모두 같은 베이스(<code>gemma-4-e4b-it-qat-4bit</code>) 계열이지만
+  로딩 인스턴스는 따로다. 어댑터가 붙거나 경로가 다르면 별도 사본이 된다.</p>
+
+  <div class="scroll">
+    <table>
+      <thead>
+        <tr><th>인스턴스</th><th>구성</th><th>담당</th><th>캐시</th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td class="name">기본형</td>
+          <td class="mono">베이스, 어댑터 없음</td>
+          <td>주제 명명 · 멤버 검증 · 병합 판정 · 요약 · 재분류</td>
+          <td class="mono">mlx_runtime 공유</td>
+        </tr>
+        <tr>
+          <td class="name">분석기</td>
+          <td class="mono">베이스 + <b>adapters4</b></td>
+          <td>글 단위 분류 (모든 글 1회)</td>
+          <td class="mono">mlx_runtime 공유</td>
+        </tr>
+        <tr>
+          <td class="name">판단기</td>
+          <td class="mono"><b>gemma4-notify3-hf</b> 단독</td>
+          <td>알림 발송 O/X</td>
+          <td class="mono">자체 보관 (공유 캐시 미사용)</td>
+        </tr>
+        <tr>
+          <td class="name">캡셔너</td>
+          <td class="mono">같은 리포를 비전 경로로</td>
+          <td>첨부 이미지 묘사</td>
+          <td class="mono">자체 보관</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="note">
+    <span class="note-k">코드와 주석의 불일치</span>
+    <p><code>mlx_runtime.py</code> 독스트링은 "(글 분석 adapters4, 판단 adapters3)
+    어댑터 하나당 ~4GB"라고 두 어댑터가 모두 공유 캐시에 있는 것처럼 서술하지만,
+    <code>MLXJudge._ensure_loaded</code>는 <code>mlx_lm.load</code>를 직접 호출해
+    자기 인스턴스에 담는다. 동작에는 문제가 없고 MLX 전용 스레드도 그대로 타지만,
+    캐시 통계를 볼 때 판단기는 잡히지 않는다.</p>
+  </div>
+</section>
+
+<section id="pipeline">
+  <div class="h2-eyebrow">본론</div>
+  <h2>전체 프로세스 10단계</h2>
+  <p class="lede">글 한 건이 들어와 알림이 되기까지를 순서대로 따라간다. 단계마다
+  <b>무엇을 하는가 → 어디에 있는가 → 왜 이렇게 만들었는가</b> 순으로 적었다. "왜"에는
+  대부분 실제로 겪은 사고가 붙어 있다.</p>
+
+  <p class="prose">앞의 <a href="#visual">그림 1</a>이 이 열 단계를 한 장으로 압축한 것이다.
+  여기서는 그 각 정거장 안에서 실제로 무슨 일이 일어나는지를 푼다.</p>
+
+  <!-- ─── 01 ─── -->
+  <div class="stage">
+    <div class="stage-no">01</div>
+    <div class="stage-body">
+      <h3>수집 — 크롤러가 쌓아둔 DB에서 새 글만 긁어온다</h3>
+      <div class="stage-where"><b>services/collect.py</b> · DcinsideCollector ·
+      60초마다</div>
+      <div class="prose">
+        <p>TrendSys는 직접 크롤링하지 않는다. 별도 프로젝트(<code>etl_dcinside</code>)의
+        크롤러가 <code>dcinside.db</code>에 글을 쌓아두면, TrendSys는 그 파일을
+        <strong>읽기 전용으로</strong> 열어 가져간다. 읽기 전용인 이유는 단순하다 —
+        크롤러가 쓰는 중인 파일에 잠금을 걸면 양쪽이 다 멈춘다.</p>
+
+        <p>어디까지 읽었는지는 <code>post_no</code>(게시글 번호) 커서로 기억한다. 이
+        커서는 메모리가 아니라 <code>games.last_post_no</code> 칼럼에 저장되므로
+        서버를 재시작해도 이어서 읽는다. 처음 붙을 때만 72시간치를 소급해 가져온다.</p>
+
+        <p>게임이 둘(<code>snr</code>, <code>solo</code>)인데 원본 DB는 하나다. 그래서
+        게임마다 <code>source_game</code>(정확 일치)과 <code>source_gallery</code>로
+        걸러 서로 섞이지 않게 한다. 이 시점부터 모든 글에는 <code>game_id</code> 꼬리표가
+        붙고, 이후 거의 모든 쿼리가 이 꼬리표로 파티션된다.</p>
+      </div>
+    </div>
+  </div>
+
+  <!-- ─── 02 ─── -->
+  <div class="stage">
+    <div class="stage-no">02</div>
+    <div class="stage-body">
+      <h3>전처리 — 묶기 정확도의 8할이 여기서 결정된다</h3>
+      <div class="stage-where"><b>services/preprocess.py</b> · preprocess()</div>
+      <div class="prose">
+        <p>가져온 글은 그대로 쓰지 않는다. 임베딩 모델에게 먹이기 전에 노이즈를
+        걷어낸다. 순서가 중요하다.</p>
+        <ol>
+          <li><b>제목과 본문을 합친다.</b> 게시판 글은 제목에 핵심이 몰려 있어서 본문만
+          쓰면 주제가 흐려진다.</li>
+          <li><b>HTML 엔티티를 되돌린다</b> — <code>&amp;nbsp;</code> 같은 것들.</li>
+          <li><b>크롤러 흔적을 지운다</b> — <code>[첨부]</code> 표식,
+          <code>- dc official App</code> 푸터.</li>
+          <li><b>URL과 HTML 태그를 지운다.</b> 링크 문자열이 남으면 전혀 다른 두 글이
+          같은 도메인을 공유한다는 이유로 가까워진다.</li>
+          <li><b>은어를 표준어로 바꾼다</b> — <code>ㄹㅇ</code>→진짜,
+          <code>섭종</code>→서비스 종료, <code>튕김</code>→강제 종료. 이 사전은 완성품이
+          아니라 <b>운영하며 키우는 자산</b>이다. "같은 주제인데 안 묶인 글"을 발견할
+          때마다 원인이 된 은어를 추가한다.</li>
+          <li><b>10자 미만을 버리고</b>(ㅇㅇ, ㅋㅋ), <b>완전 중복을 버리고</b>,
+          <b>2000자에서 자른다.</b></li>
+        </ol>
+
+        <p>동시에, 본문 원문에서 디시 이미지 서버 URL만 골라내 최대 3장까지
+        <code>image_path</code>에 적어둔다. 이게 나중에 캡션 워커가 볼 대기표다.
+        <b>중복 제거가 필수</b>인데, 크롤러가 같은 이미지를 본문과 첨부에 두 번 남기는
+        경우가 있어 그대로 두면 같은 캡션 문장이 세 번 반복되는 사고가 난다.</p>
+
+        <div class="note why">
+          <span class="note-k">왜 여기가 8할인가</span>
+          <p>이후 단계는 전부 벡터 연산이다. 벡터는 입력된 문자열만 본다. 여기서 남긴
+          쓰레기는 뒤에서 절대 걸러지지 않고, 오히려 "쓰레기를 공유하는 글끼리
+          가까워지는" 형태로 증폭된다.</p>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ─── 03 ─── -->
+  <div class="stage">
+    <div class="stage-no">03</div>
+    <div class="stage-body">
+      <h3>임베딩 — 글을 1024개의 숫자로 바꾼다</h3>
+      <div class="stage-where"><b>services/embedding.py</b> · KURE-v1 ·
+      한국어 특화</div>
+      <div class="prose">
+        <p>정리된 텍스트를 <code>nlpai-lab/KURE-v1</code>에 넣어 1024차원 벡터를 얻는다.
+        "비슷한 뜻의 글은 비슷한 방향의 화살표가 된다"고 생각하면 된다. 두 글이 얼마나
+        비슷한지는 두 화살표의 <b>코사인 유사도</b>(방향이 얼마나 같은지)로 잰다.</p>
+
+        <p>벡터는 <b>정규화해서</b> 저장한다(길이를 1로 맞춤). 이게 나중에 아주
+        중요해진다 — 정규화된 벡터끼리는 내적이 곧 코사인 유사도가 되어, 유사도 계산이
+        곱셈 한 번으로 끝난다.</p>
+
+        <p>원칙은 <strong>새 글만 딱 한 번</strong>이다. 계산해서 DB에 넣어두고 다시
+        계산하지 않는다. 유일한 예외가 캡션이 붙은 글이다.</p>
+
+        <div class="note risk">
+          <span class="note-k">건드리면 안 되는 것</span>
+          <p>임베딩 모델을 바꾸면 유사도의 스케일 자체가 달라진다. 그러면 뒤에 나오는
+          임계값(0.60 / 0.85 / 0.92)이 전부 무의미해지고, 전량 재임베딩 + 카테고리·주제
+          재구축이 필요하다. 사실상 시스템을 다시 캘리브레이션하는 일이다.</p>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ─── 04 ─── -->
+  <div class="stage">
+    <div class="stage-no">04</div>
+    <div class="stage-body">
+      <h3>캡션 — 이미지를 문장으로 바꿔 좌표에 반영한다 <span class="pill warn">병렬</span></h3>
+      <div class="stage-where"><b>services/caption.py</b> · mlx-vlm · 20초 주기 ·
+      글당 최대 3장</div>
+      <div class="prose">
+        <p>임베딩 모델은 텍스트만 읽는다. 그런데 게시판 글의 상당수는 이미지가 본론이다
+        ("이거 봐라" + 오류 스크린샷). 그래서 별도 워커가 이미지를 <b>문장으로 바꿔</b>
+        본문에 붙이고 <b>그 글만 다시 임베딩</b>한다.</p>
+
+        <p>다운로드할 때 <code>Referer</code> 헤더가 필수다. 디시 이미지 서버는 없으면
+        차단한다. 그다음 멀티모달 모델에게 <b>글 내용과 함께</b> 보여주고 이미지마다
+        셋 중 하나로 판정시킨다.</p>
+
+        <div class="scroll">
+          <table>
+            <thead><tr><th>판정</th><th>대상</th><th>처리</th></tr></thead>
+            <tbody>
+              <tr><td class="name">인증</td><td>점수·승패·순위·보상·클리어 결과 화면</td>
+                  <td>캡션을 <b>붙이지 않음</b></td></tr>
+              <tr><td class="name">묘사</td><td>오류 장면, 세팅 화면, 공지 캡처 등 정보성</td>
+                  <td>한 문장으로 묘사해 붙임</td></tr>
+              <tr><td class="name">무관</td><td>반응짤·밈·캐릭터 일러스트</td>
+                  <td>버림 (첨부의 약 1/3)</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <div class="note why">
+          <span class="note-k">'인증'이라는 분류가 왜 따로 있나</span>
+          <p>결과창 인증샷은 글과 <b>관련은 있다</b>. 그래서 처음엔 묘사하게 뒀다. 그런데
+          캡션 문구가 정형화된다 — "...완료 화면으로 점수를 보여준다". 그 결과 아무
+          상관 없는 인증글들이 임베딩에서 한 덩어리로 뭉쳤다. 실측: '오상'이라고만 쓴
+          단문 인증글이 52건짜리 주제의 필러가 됐다. 그래서 관련은 인정하되 좌표에는
+          반영하지 않는 제3의 분류를 만들었다.</p>
+          <p>조건을 <b>쓰는 순서</b>도 실측으로 정해졌다. 묘사가 모델의 기본 동작이라
+          묘사 조건을 먼저 쓰면 결과창까지 전부 묘사로 빠진다(인증 판정 0/22). 인증을
+          첫 조건으로 두고 묘사 조건에 "결과 화면 제외"를 명시해야 갈린다.</p>
+        </div>
+
+        <p>캡션은 <strong>임베딩(주제 묶기)에만</strong> 반영된다. 다음 단계의 adapters4
+        분석 입력에는 넣지 않는다. 학습 데이터의 입력 형식과 어긋나기 때문이다.</p>
+      </div>
+    </div>
+  </div>
+
+  <!-- ─── 05 ─── -->
+  <div class="stage">
+    <div class="stage-no">05</div>
+    <div class="stage-body">
+      <h3>분석과 카테고리 — 호출 한 번으로 둘 다 끝난다</h3>
+      <div class="stage-where"><b>services/gemma_analyze.py</b> → <b>services/categorize.py</b> ·
+      adapters4 · 20초 주기 · 배치 5건</div>
+      <div class="prose">
+        <p>이 두 가지는 코드상 한 호흡이므로 나눠 설명하지 않는다.</p>
+
+        <h4>큐는 테이블이 아니다</h4>
+        <p>대기열용 테이블이 따로 없다. <b>"분석 결과 행이 없는 글" 자체가 큐</b>다
+        (<code>LEFT JOIN post_analysis ... IS NULL</code>). 덕분에 재시작해도, 글이
+        폭증해도 유실이 없다. 정렬은 <b>최신 글 우선</b>이다 — 관제는 신선도가 생명이고,
+        밀린 백로그도 결국 다 소화되기 때문이다.</p>
+
+        <h4>글 한 건 → 한 줄</h4>
+        <p>글마다 adapters4를 한 번 호출한다. 입력은 <code>제목\n본문</code>을 2000자에서
+        자른 것 — <b>학습 데이터와 한 글자도 다르면 안 된다.</b> 출력은 딱 한 줄이다.</p>
+
+        <pre><code>[밸런스] 신규 캐릭터 성능 논란___밸런스___balance_complaint
+       ↑ 주제문구                    ↑ 대분류   ↑ 감성</code></pre>
+
+        <p>파싱은 엄격하다. <code>___</code>로 셋으로 갈리고, 대분류가 6종
+        화이트리스트에, 감성이 7종에 들어야 통과한다. 실패하면 재시도 횟수를 1 올리고
+        다음 라운드로 넘긴다. <b>3회까지</b> 시도하고 그 뒤엔 포기한다.</p>
+
+        <h4>규칙 매핑 — 여기서 LLM을 다시 부르지 않는다</h4>
+        <p>대분류가 나왔으면 카테고리는 <b>표 조회</b>로 끝난다.</p>
+
+        <div class="scroll">
+          <table>
+            <thead><tr><th>adapters4 대분류</th><th>카테고리</th><th>현재 글 수 (snr)</th></tr></thead>
+            <tbody>
+              <tr><td class="mono">콘텐츠</td><td class="name">콘텐츠·공략</td><td class="num">674</td></tr>
+              <tr><td class="mono">운영</td><td class="name">운영·이벤트</td><td class="num">385</td></tr>
+              <tr><td class="mono">밸런스</td><td class="name">밸런스</td><td class="num">1,022</td></tr>
+              <tr><td class="mono">과금</td><td class="name">과금</td><td class="num">75</td></tr>
+              <tr><td class="mono">버그</td><td class="name">버그·오류</td><td class="num">88</td></tr>
+              <tr><td class="mono">일반 + 육성 어휘</td><td class="name">캐릭터·장비·덱</td><td class="num">1,621</td></tr>
+              <tr><td class="mono">일반 (그 외)</td><td class="name">일반·잡담</td><td class="num">11,613</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <p>"일반"만 한 번 더 쪼갠다. 주제문구에 <b>캐릭터·헌터·육성·장비·세팅·덱·스킬·
+        무기·아티팩트·돌파·초월·강화·조합</b> 중 하나라도 있으면 <code>캐릭터·장비·덱</code>,
+        아니면 <code>일반·잡담</code>이다.</p>
+
+        <div class="note why">
+          <span class="note-k">왜 주제문구를 카테고리 이름으로 안 쓰나</span>
+          <p>예전에는 LLM이 자유롭게 카테고리 이름을 지었다. 그 결과 지금 DB에
+          <b>"게임 플레이 질문", "루디 활용 논의", "캐릭터 코스튬 문의"</b> 같은 이름이
+          46개나 남아 있다 — 전부 글 0건짜리 유령이다. 큰 분류와 지나치게 좁은 이름이
+          같은 계층에 섞이면 관제 화면이 무너진다. 그래서 자유형 문자열은 카테고리
+          이름에서 추방하고 <b>7개 고정</b>으로 못 박았다.</p>
+        </div>
+
+        <h4>중심벡터는 50건에서 얼린다</h4>
+        <p>카테고리마다 중심벡터를 들고 있고, 글이 배정될 때마다 이동 평균으로 갱신한다.
+        단 <code>post_count</code>가 50에 닿으면 <b>동결</b>한다. 계속 갱신하면 중심이
+        "게시판 평균 글" 방향으로 표류해서, 결국 아무 글이나 다 빨아들이는 블랙홀이
+        되기 때문이다.</p>
+      </div>
+    </div>
+  </div>
+
+  <!-- ─── 06 ─── -->
+  <div class="stage">
+    <div class="stage-no">06</div>
+    <div class="stage-body">
+      <h3>주제 묶기 — 평균 유사도로 자라는 그룹</h3>
+      <div class="stage-where"><b>services/topics.py</b> · _greedy_groups() ·
+      임계 0.60 · 최소 6건 · 매 60초 전체 재계산</div>
+      <div class="prose">
+        <p>최근 24시간 글을 전부 꺼내 시간순으로 훑으면서, 글마다 "가장 잘 맞는 그룹"에
+        넣는다. 맞는 그룹이 없으면 새 그룹을 만든다. 6건을 못 채운 그룹은 버린다.</p>
+
+        <p>핵심은 <b>그룹을 무엇으로 대표하느냐</b>다. 여기 아주 영리한 수학 트릭이 있다.</p>
+
+        <pre><code>그룹 대표 = 멤버 벡터들의 산술평균  (정규화하지 않음)
+
+입력이 단위벡터이므로
+    v · mean  ==  v와 그룹 멤버 전원과의 평균 코사인 유사도</code></pre>
+
+        <p>즉 <b>정규화를 생략하는 것만으로</b> "이 글이 그룹의 모든 멤버와 평균적으로
+        얼마나 비슷한가"를 곱셈 한 번에 얻는다. 이걸 average-link라고 부른다.</p>
+
+        <p>부수 효과가 더 좋다. 잡탕 그룹일수록 멤버 벡터들이 서로 다른 방향을 가리키니
+        평균의 <b>길이가 줄어든다</b>. 길이가 줄면 내적값도 작아지니 새 글이 들어오기가
+        저절로 어려워진다. <strong>조밀한 그룹만 자라는 자기 조절</strong>이 공짜로 걸린다.</p>
+
+        <div class="note why">
+          <span class="note-k">눈덩이 블롭 사고 (2026-07-12)</span>
+          <p>이전에는 그룹 중심을 <b>정규화해서</b> 비교했다. 그러면 정반대 현상이
+          벌어진다 — 잡탕 그룹의 중심은 모두에게서 어중간하게 가까운 "만인의 허브"가
+          되어, 붙을수록 더 잘 붙는 눈덩이가 된다. 24시간 창 실측에서
+          <b>멤버끼리 유사도가 0.577밖에 안 되는 156건짜리 블롭</b>이 만들어졌다.
+          정규화 한 줄을 빼는 것으로 해결됐다.</p>
+          <p>대신 임계값을 낮춰야 했다. 평균 기준값은 정규화 중심 기준값보다 작게
+          나오므로 0.70 → <b>0.60</b>으로, 최소 크기는 4 → <b>6</b>으로 조정했다.</p>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ─── 07 ─── -->
+  <div class="stage">
+    <div class="stage-no">07</div>
+    <div class="stage-body">
+      <h3>병합 · 매칭 · 명명 — 같은 사건이 갈라지지 않게 붙드는 세 장치</h3>
+      <div class="stage-where"><b>services/topics.py</b> · _merge_sweep() →
+      1:1 매칭 → _name_topic()</div>
+      <div class="prose">
+        <p>06에서 만든 것은 <b>이번 사이클의 그룹</b>일 뿐이다. 이 그룹이 "어제부터 있던
+        그 주제"인지, "방금 태어난 새 사건"인지 판정해야 알림 쿨다운과 점수 이력이
+        의미를 갖는다. 세 장치가 순서대로 작동한다.</p>
+
+        <h4>① 분열 회수 — 이미 갈라진 것을 되돌린다</h4>
+        <p>기존 주제들끼리 중심 유사도를 재서, 사실상 같은 사건이면 합친다.</p>
+        <ul>
+          <li><b>0.92 이상</b> — LLM 없이 즉시 병합. 사이클당 최대 5쌍.</li>
+          <li><b>0.75 ~ 0.92</b> — 애매한 구간. <b>사이클당 딱 1쌍만</b> LLM에게
+          "같은 사건이냐" 물어본다. "별개"라는 답은 파일에 캐시해 <b>다시는 묻지 않는다</b>.</li>
+        </ul>
+        <p>합칠 때 중심은 <b>창 내 멤버 수로 가중 평균</b>한다. 단순히 반반 더하면
+        4건짜리가 200건짜리 중심을 절반이나 끌고 가서, 다음 사이클에 엉뚱한 주제를 또
+        흡수한다.</p>
+
+        <div class="note why">
+          <span class="note-k">0.92라는 숫자의 유래</span>
+          <p>처음엔 0.85(매칭 임계값과 동일)였다. 그런데 0.876~0.887 구간에서 잡탕
+          주제끼리 뭉치는 블랙홀 병합이 섞였다. 확실한 쌍들은 0.899~0.939에 몰려
+          있었다. 그래서 0.90으로 올렸는데, 그것도 부족했다 — 2026-07-12 로그에서
+          0.903~0.930 구간의 오병합(아리스 육성 + 즉사덱 밸런스)이 확인돼
+          <b>0.92</b>로 다시 올렸다.</p>
+        </div>
+
+        <h4>② 1:1 매칭 — 한 주제에 두 그룹이 붙지 못하게</h4>
+        <p>(이번 그룹 × 기존 주제) 모든 조합의 유사도를 구해 <b>내림차순으로 정렬</b>한
+        뒤, 위에서부터 짝지어간다. 이미 쓰인 그룹이나 주제는 건너뛴다. 0.85 미만이
+        나오면 그 아래는 전부 미달이므로 멈춘다.</p>
+
+        <div class="note why">
+          <span class="note-k">왜 1:1을 강제하나</span>
+          <p>여러 그룹이 같은 주제 번호를 물면, 벡터 단계에서 애써 갈라놓은 것을 도로
+          한 덩어리로 합치는 셈이 된다. 실측에서 "아리스 장비 / 아리스 성능 / 방덱 메타"가
+          매 사이클 재결합됐다. 최적의 그룹 하나만 번호를 승계하고, 밀린 그룹은 차선
+          주제로 가거나 새로 태어난다.</p>
+        </div>
+
+        <h4>③ 명명 — 그리고 태어나는 순간의 분열 예방</h4>
+        <p>기존 주제와 짝지어진 그룹은 이름을 그대로 쓴다. 짝이 없는 <b>새 그룹만</b>
+        LLM을 부른다(그래서 이 호출은 드물고 병목이 아니다).</p>
+        <p>이름 규칙은 <b>'〈구체적 대상〉 + 〈사건/행위〉'</b> 2~6어절이다. "게임 플레이에
+        대한 격렬한 반응" 같은 답이 오면 모호어 목록에 걸려 <b>재시도</b>한다. 두 번
+        실패하면 대표 글 제목 30자로 폴백한다.</p>
+        <p>동시에 <b>0.75~0.85 구간의 기존 주제 3개</b>를 후보로 함께 보여주고 "같은
+        사건이면 이름 대신 번호만 답하라"고 시킨다. 번호가 오면 추가 호출 없이 기존
+        주제로 편입된다 — <strong>분열을 태어나는 순간에 잡는 것</strong>이다.</p>
+
+        <h4>이름이 낡으면 다시 짓는다</h4>
+        <p>주제는 살아 있는 동안 내용이 표류한다. 그래서 "이름을 지었던 시점의 중심"을
+        따로 저장해두고, 현재 중심이 거기서 0.85 미만으로 멀어지면 현재 멤버로 이름을
+        다시 짓는다(실행당 1회 한도).</p>
+        <div class="note why">
+          <span class="note-k">라드 필수성 사건</span>
+          <p>「라드 필수성」이라는 주제에 어느새 <b>루디 각성 얘기가 98건</b> 들어와
+          있었다. 이름이 낡으면 관제자가 화면을 오독할 뿐 아니라, 다음 단계의 멤버
+          검증이 <b>낡은 이름을 기준으로 판정</b>해서 멀쩡한 글을 쫓아내기 시작한다.
+          그래서 이름이 바뀌면 그 주제의 검증 캐시를 통째로 버린다.</p>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ─── 08 ─── -->
+  <div class="stage">
+    <div class="stage-no">08</div>
+    <div class="stage-body">
+      <h3>멤버 검증 — 예산제로 조금씩 정화한다</h3>
+      <div class="stage-where"><b>services/topics.py</b> · verify_topic_members() ·
+      사이클당 1배치(5건)</div>
+      <div class="prose">
+        <p>묶기는 순수 벡터라 인접한 용어가 섞인다. 그렇다고 매분 수백 건을 LLM으로
+        검증할 수는 없다. 그래서 <b>점진 처리</b>한다.</p>
+        <ul>
+          <li>판정은 <b>(주제, 글) 쌍 단위로 캐시</b>한다 — 같은 글을 두 번 묻지 않는다.
+          캐시는 파일로 저장되어 재시작해도 유지된다. LLM 판정 수백 건은 그 자체로 자산이다.</li>
+          <li>평시엔 <b>사이클당 1배치(5건)</b>만 쓴다. 주제는 큰 순서로 처리되므로
+          예산은 큰 주제부터 간다.</li>
+          <li><b>X로 확정된 글만</b> 뺀다. 아직 안 물어본 글은 일단 포함한다 —
+          몇 분에 걸쳐 서서히 깨끗해진다.</li>
+          <li>버스트 주제는 <b>예산과 무관하게 2배치를 먼저</b> 쓴다. 알림 길목에
+          이물질이 들어가면 요약과 판단이 통째로 오염되기 때문이다.</li>
+        </ul>
+        <p>검증 후 6건 미만으로 줄면 그 주제는 화면에서 사라지고, 버스트 판정도
+        취소된다.</p>
+      </div>
+    </div>
+  </div>
+
+  <!-- ─── 09 ─── -->
+  <div class="stage">
+    <div class="stage-no">09</div>
+    <div class="stage-body">
+      <h3>열기와 버스트 — 지금 뜨거운가, 갑자기 뜨거워졌나</h3>
+      <div class="stage-where"><b>services/detection.py</b> · 반감기 30분</div>
+      <div class="prose">
+        <p>두 가지 다른 질문에 두 가지 다른 지표가 답한다.</p>
+
+        <pre><code>열기(heat) = Σ 0.5 ^ (글 나이(분) / 30)
+
+    방금 올라온 글  → 1.00
+    30분 전 글      → 0.50
+    60분 전 글      → 0.25
+    3시간 전 글     → 0.016</code></pre>
+
+        <p>글 수를 그냥 세면 "어제 종일 100건"과 "방금 10분간 30건"을 구분할 수 없다.
+        나이에 따라 가중치를 반감시키면 <b>지금 살아있는 대화의 크기</b>가 나온다.</p>
+
+        <pre><code>버스트 = (최근 60분 글 수 ≥ 5)
+       AND (최근 60분 글 수 ÷ 평소 시간당 ≥ 3배)</code></pre>
+
+        <p>비율 조건만 쓰면 평소 0건이던 주제에 2건만 와도 무한대 배수가 나온다. 그래서
+        <b>절대량 조건을 함께</b> 건다. 이 두 조건을 동시에 넘긴 주제만 다음 단계로 간다.</p>
+
+        <p>같은 계산을 카테고리에도 돌려 <code>category_scores</code>에 매분 적재한다.
+        이건 화면의 스파크라인용이고, <b>알림 판단에는 쓰이지 않는다.</b></p>
+      </div>
+    </div>
+  </div>
+
+  <!-- ─── 10 ─── -->
+  <div class="stage">
+    <div class="stage-no">10</div>
+    <div class="stage-body">
+      <h3>요약 → 판단 → 알림 → 소강</h3>
+      <div class="stage-where"><b>services/summarize.py</b> · <b>services/judge.py</b> ·
+      <b>services/pipeline.py</b></div>
+      <div class="prose">
+        <p>버스트 주제만 이 비싼 구간에 들어온다.</p>
+
+        <h4>요약</h4>
+        <p>중심에 가까운 순으로 대표 15건을 뽑아 기본형 모델에게 3줄 형식(주제 /
+        대표제목 / 요약)으로 요약시킨다. 프롬프트에 <b>디시 도메인 설명</b>을 반드시
+        넣는다 — "환불각", "망겜", "섭종해라"는 대부분 상투적 푸념이지 사건 제보가
+        아니라는 것을 알려주지 않으면, 모델이 단어만 보고 실제 결제 장애로 읽는다.</p>
+
+        <h4>라벨 교체 — 두 모델이 만나는 지점</h4>
+        <p>판단 모델에 넣을 라벨은 요약 결과를 쓰지 <b>않는다</b>. 대신 멤버 글들이
+        adapters4에게 받았던 <b>주제문구의 다수결</b>을 쓴다.</p>
+        <pre><code>입력 = "{다수결 주제문구}___{대표 제목}___{요약}"</code></pre>
+        <p>판단 모델은 이 형식과 이 어휘로 학습됐다. 요약 모델이 지어낸 새로운 표현을
+        넣으면 학습 때 보던 분포와 어긋난다. <b>파이프라인에서 두 파인튜닝 모델이
+        직접 맞물리는 유일한 이음매</b>다.</p>
+
+        <h4>판단과 발송</h4>
+        <p>머지 모델이 <code>O</code>(발송) 또는 <code>X</code>(미발송)를 뱉는다. 파싱에
+        실패하면 보수적으로 X로 간주한다. <code>O</code>이고 그 주제의 쿨다운 60분이
+        지났으면 발송한다.</p>
+
+        <div class="note why">
+          <span class="note-k">X도 기록하는 이유</span>
+          <p>발송 이력에 O만 남기면 담당자가 교정할 수 있는 건 오탐(잘못 보낸 것)뿐이다.
+          <b>미탐</b>(보냈어야 했는데 안 보낸 것)을 잡으려면 X도 남아 있어야 한다.
+          그래야 학습 데이터의 O/X 균형이 맞는다. 판단 입력 원문을 함께 저장하므로,
+          담당자가 피드백을 다는 순간 그대로 <code>(input, output)</code> 학습쌍이 된다.
+          지금까지 O 151건, X 52건이 쌓였다.</p>
+        </div>
+
+        <h4>소강 — LLM 없이 기계적으로</h4>
+        <p>알림을 보낸 주제는 계속 감시한다. <b>열기가 정점의 25% 이하</b>이고
+        <b>최근 창 글이 5건 미만</b>인 상태가 <b>10사이클(≈10분) 연속</b>이면 "이슈
+        소강" 알림을 보낸다. 완전히 조용해지면 정점의 25%까지 약 60분이 걸리므로,
+        체감상 "종료 후 1시간쯤 뒤에 확인 알림"이 나가는 페이스다. 여기엔 LLM이
+        필요 없다. 지금까지 64건 나갔다.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="loops">
+  <div class="h2-eyebrow">동시성</div>
+  <h2>세 개의 루프</h2>
+
+  <div class="prose">
+    <p>앞의 10단계는 <b>세 개의 독립 루프</b>에 나눠 살고 있다. 이 분리가 이 시스템에서
+    가장 중요한 구조적 결정이다.</p>
+
+    <div class="scroll">
+      <table>
+        <thead><tr><th>루프</th><th>주기</th><th>담당 단계</th><th>밀리면</th></tr></thead>
+        <tbody>
+          <tr><td class="name">pipeline_loop</td><td class="mono">60초</td>
+              <td>01·02·03 + 06~10</td><td>관제가 멈춤 — 최우선</td></tr>
+          <tr><td class="name">gemma_worker_loop</td><td class="mono">20초</td>
+              <td>05 (분석 + 카테고리)</td><td>큐에 쌓였다가 한가할 때 따라잡음</td></tr>
+          <tr><td class="name">caption_worker_loop</td><td class="mono">20초</td>
+              <td>04 (이미지)</td><td>글은 텍스트만으로 이미 돌아감</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <p>세 루프가 각자의 박자로 돌기 때문에, 글 한 건이 화면에 완전히 나타나기까지는
+    <b>여러 번의 대기</b>를 거친다. 아래가 그 실제 타이밍이다.</p>
+
+    <figure>
+      <div class="fig-frame">
+        <svg viewBox="0 0 920 270" role="img"
+             aria-label="글이 등록된 뒤 수집 루프와 Gemma 워커의 서로 다른 주기를 기다리며 화면에 반영되기까지 약 2분이 걸리는 타임라인">
+          <defs>
+            <marker id="a6" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="5.5"
+                    markerHeight="5.5" orient="auto-start-reverse">
+              <path d="M0 0 L10 5 L0 10 z" fill="currentColor" />
+            </marker>
+          </defs>
+
+          <text class="t" x="10" y="46">게시판</text>
+          <path class="axis" d="M150 48 H890" />
+          <text class="t" x="10" y="106">수집 루프</text>
+          <text class="t-sm" x="10" y="120">60초</text>
+          <path class="axis" d="M150 108 H890" />
+          <path class="axis" d="M150 102 V114" /><path class="axis" d="M520 102 V114" />
+          <path class="axis" d="M890 102 V114" />
+          <text class="t" x="10" y="166">Gemma 워커</text>
+          <text class="t-sm" x="10" y="180">20초</text>
+          <path class="axis" d="M150 168 H890" />
+          <path class="axis" d="M150 162 V174" /><path class="axis" d="M273 162 V174" />
+          <path class="axis" d="M397 162 V174" /><path class="axis" d="M520 162 V174" />
+          <path class="axis" d="M643 162 V174" /><path class="axis" d="M767 162 V174" />
+          <path class="axis" d="M890 162 V174" />
+          <text class="t" x="10" y="216">캡션 워커</text>
+          <text class="t-sm" x="10" y="230">20초</text>
+          <path class="axis" d="M150 218 H890" />
+          <path class="axis" d="M150 212 V224" /><path class="axis" d="M273 212 V224" />
+          <path class="axis" d="M397 212 V224" /><path class="axis" d="M520 212 V224" />
+          <path class="axis" d="M643 212 V224" /><path class="axis" d="M767 212 V224" />
+          <path class="axis" d="M890 212 V224" />
+
+          <circle cx="199" cy="48" r="5" fill="var(--accent)" />
+          <text class="t-a" x="199" y="34" text-anchor="middle">글 등록 (8초)</text>
+          <path class="ar-ad" d="M199 48 H514" style="color: var(--accent)" />
+          <path class="ar-a" d="M520 48 V102" marker-end="url(#a6)" style="color: var(--accent)" />
+          <text class="t-sm" x="528" y="72">저장 · 임베딩</text>
+          <text class="t-sm" x="528" y="86">이때부터 주제 묶기 대상</text>
+
+          <path class="ar-ad" d="M520 108 H637" style="color: var(--accent)" />
+          <path class="ar-a" d="M643 108 V162" marker-end="url(#a6)" style="color: var(--accent)" />
+          <text class="t-sm" x="651" y="136">분석 · 카테고리 배정</text>
+
+          <path class="ar-ad" d="M643 168 H890" style="color: var(--accent)" />
+          <path class="ar-a" d="M890 168 V114" marker-end="url(#a6)" style="color: var(--accent)" />
+          <text class="t-sm" x="882" y="150" text-anchor="end">카테고리까지 반영된 화면</text>
+
+          <text class="t-sm" x="150" y="244" text-anchor="middle">0초</text>
+          <text class="t-sm" x="273" y="244" text-anchor="middle">20</text>
+          <text class="t-sm" x="397" y="244" text-anchor="middle">40</text>
+          <text class="t-sm" x="520" y="244" text-anchor="middle">60</text>
+          <text class="t-sm" x="643" y="244" text-anchor="middle">80</text>
+          <text class="t-sm" x="767" y="244" text-anchor="middle">100</text>
+          <text class="t-sm" x="890" y="244" text-anchor="middle">120초</text>
+          <text class="t-a" x="150" y="264">글 등록부터 카테고리까지 반영되기까지 최대 약 2분</text>
+        </svg>
+      </div>
+      <figcaption>주황 점선은 <b>다음 tick을 기다리는 시간</b>이다. 글은 등록 즉시
+      처리되지 않고, 수집 루프의 60초 박자와 Gemma 워커의 20초 박자를 차례로 기다린다.
+      대신 이 구조 덕분에 <b>어느 한 단계가 밀려도 나머지가 멈추지 않는다</b> — 분석이
+      수천 건 밀려 있어도 관제 화면의 열기와 버스트는 60초마다 정확히 갱신된다.</figcaption>
+    </figure>
+
+    <p>워커들은 큐가 남아 있으면 <code>sleep</code>을 건너뛰고 연달아 배치를 돈다.
+    게임이 여러 개면 <b>라운드로빈</b>으로 한 배치씩 공평하게 처리한다 — 한 게임의
+    대량 백로그가 다른 게임의 최신 글을 막지 않게.</p>
+
+    <h3>MLX는 스레드에 묶인다</h3>
+    <p>여기에 플랫폼 제약이 하나 있다. <b>MLX의 GPU 스트림은 생성된 스레드에
+    묶인다.</b> FastAPI는 무거운 작업을 스레드풀에 던지므로, 모델 로딩과 추론이 다른
+    스레드에서 일어나면 <code>RuntimeError: There is no Stream(gpu, N)</code>가 난다.</p>
+    <p>해결책은 <code>services/mlx_runtime.py</code>의 <b>max_workers=1 전용 스레드</b>다.
+    판단·요약·분류·캡셔닝 등 MLX를 쓰는 모든 작업이 이 하나의 스레드를 통과한다.
+    부수 효과로 모든 LLM 추론이 <b>직렬화</b>되어 동시 실행에 의한 메모리 경합도
+    사라진다. 반대로 말하면 <strong>LLM 작업은 절대 병렬로 빨라지지 않는다</strong> —
+    앞서 나온 "사이클당 1배치", "사이클당 1쌍" 같은 예산 제한이 전부 이 제약에서
+    나온다.</p>
+  </div>
+</section>
+
+<section id="data">
+  <div class="h2-eyebrow">저장소</div>
+  <h2>데이터 모델</h2>
+  <p class="lede">SQLite 파일 하나(<code>data/pipeline.db</code>, 현재 153MB)에 9개
+  테이블. 모든 데이터 테이블에 <code>game_id</code> 파티션 키가 있다.</p>
+
+  <div class="scroll">
+    <table>
+      <thead><tr><th>테이블</th><th>역할</th><th>쓰는 단계</th><th>규모</th></tr></thead>
+      <tbody>
+        <tr><td class="name">posts</td><td>글 본문 · 임베딩 · 배정 결과</td>
+            <td class="mono">01→10 전부</td><td class="num">15,684</td></tr>
+        <tr><td class="name">post_analysis</td><td>adapters4 판정 (주제문구·대분류·감성)</td>
+            <td class="mono">05, 10</td><td class="num">15,648</td></tr>
+        <tr><td class="name">categories</td><td>영속 카테고리 + 중심벡터</td>
+            <td class="mono">05, 09</td><td class="num">60</td></tr>
+        <tr><td class="name">topics</td><td>영속 주제 + 중심 + 명명기준 + 소강상태</td>
+            <td class="mono">06, 07, 10</td><td class="num">144</td></tr>
+        <tr><td class="name">alerts</td><td>발송 이력 + 판단 입력 원문 + 피드백</td>
+            <td class="mono">10</td><td class="num">267</td></tr>
+        <tr><td class="name">category_scores</td><td>카테고리 열기 시계열 (7일)</td>
+            <td class="mono">09</td><td class="num">—</td></tr>
+        <tr><td class="name">topic_scores</td><td>주제 열기 시계열 (30일)</td>
+            <td class="mono">09</td><td class="num">—</td></tr>
+        <tr><td class="name">snapshots</td><td>매 사이클 화면 전체를 gzip 블롭으로 (타임머신)</td>
+            <td class="mono">10</td><td class="num">—</td></tr>
+        <tr><td class="name">games</td><td>게임 등록 + 수집 커서</td>
+            <td class="mono">01</td><td class="num">2</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h3>DB 밖에 사는 상태 두 가지</h3>
+  <p class="prose">전부 DB에 있는 건 아니다. 두 개의 JSON 파일이
+  <code>data/</code>에 따로 산다 — 주제 멤버 검증 판정 캐시
+  (<code>topic_verify_cache.json</code>)와 병합 "별개" 판정 캐시
+  (<code>topic_merge_cache.json</code>). 서비스 코드가 직접 읽고 쓰며, 모듈 전역
+  딕셔너리로 메모리에 상주한다. <b>이 구조는 프로세스가 하나일 때만 성립한다</b> —
+  워커를 여러 개로 띄우면 즉시 깨진다. 인메모리 최신 스냅샷
+  (<code>app/store.py</code>)도 같은 제약을 갖는다.</p>
+</section>
+
+<section id="surface">
+  <div class="h2-eyebrow">노출면</div>
+  <h2>화면과 API</h2>
+
+  <div class="prose">
+    <p>프론트는 Vue 3 MVVM이다. <code>models/api.js</code>가 유일한 통신 계층,
+    <code>viewmodels/use*.js</code>가 상태와 로직, <code>views/</code>와
+    <code>components/</code>가 표시를 맡는다. <b>컴포넌트 7개와 뷰모델 11개는 100%
+    사용 중</b>이다 — 프론트에는 죽은 파일이 없다.</p>
+
+    <p>화면은 11개이고 사이드바에 9개가 링크되어 있다. 나머지 둘
+    (<code>/categories/:id</code>, <code>/topics/:id</code>)은 상세 화면이라 목록에서
+    타고 들어간다.</p>
+
+    <div class="scroll">
+      <table>
+        <thead><tr><th>경로</th><th>화면</th><th>쓰는 API</th></tr></thead>
+        <tbody>
+          <tr><td class="mono">/</td><td>실시간 관제</td><td class="mono">status · categories · topics · posts/recent · run · recluster-check</td></tr>
+          <tr><td class="mono">/categories</td><td>카테고리 전체</td><td class="mono">categories</td></tr>
+          <tr><td class="mono">/topics</td><td>주제 전체</td><td class="mono">topics</td></tr>
+          <tr><td class="mono">/alerts</td><td>알림 판정·이력</td><td class="mono">alerts · feedback · <b>export</b></td></tr>
+          <tr><td class="mono">/timemachine</td><td>과거 시점 재생</td><td class="mono">snapshots · snapshot · history/range</td></tr>
+          <tr><td class="mono">/gemma</td><td>글 단위 분석 결과·큐</td><td class="mono">gemma/analyses</td></tr>
+          <tr><td class="mono">/judge</td><td>판단 모델 단독 테스트</td><td class="mono">judge/test</td></tr>
+          <tr><td class="mono">/hdbscan</td><td>안전망 점검</td><td class="mono">maintenance/recluster-check</td></tr>
+          <tr><td class="mono">/cosine</td><td>유사도 탐색</td><td class="mono">maintenance/cosine-cluster</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <p>API는 20개다. 그중 <b>19개가 프론트에서 실제로 호출된다.</b> 유일한 예외가
+    아래 하나다.</p>
+
+    <div class="note">
+      <span class="note-k">UI에서 도달 불가</span>
+      <p><code>POST /api/maintenance/reclassify</code> — 창 내 전체 글을 현재
+      카테고리 체계로 LLM 재분류하는 유지보수 엔드포인트. <code>api.js</code>에 없어
+      화면에서는 부를 수 없고 <code>curl</code>로만 접근한다. 글 수천 건 기준 수십 분이
+      걸리는 작업이므로 의도적으로 숨긴 것으로 보이나, 코드에는 남아 있다.</p>
+    </div>
+  </div>
+</section>
+
+<section id="dead">
+  <div class="h2-eyebrow">감사</div>
+  <h2>죽은 코드</h2>
+  <p class="lede">"죽음"을 한 덩어리로 묶으면 판단을 그르친다. 지워도 되는 것,
+  일부러 남긴 것, 설정 하나로 살아나는 것은 다르게 다뤄야 한다. 등급을 나눴다.</p>
+
+  <h3><span class="pill dead">A등급</span> 완전 미호출 — 지워도 무방</h3>
+  <div class="scroll">
+    <table>
+      <thead><tr><th>대상</th><th>위치</th><th>메모</th></tr></thead>
+      <tbody>
+        <tr><td class="mono">mark_category_alerted()</td><td class="mono">db.py:528</td>
+            <td>카테고리 단위 쿨다운의 잔재. 쿨다운이 주제 단위로 옮겨가며 호출부가 사라짐</td></tr>
+        <tr><td class="mono">load_games()</td><td class="mono">db.py:333</td>
+            <td>게임 목록은 <code>settings.games</code>에서 읽으므로 DB판이 불필요해짐</td></tr>
+        <tr><td class="mono">settings.same_topic_sim</td><td class="mono">config.py</td>
+            <td>0.85로 선언만 되어 있고 참조 0회</td></tr>
+        <tr><td class="mono">categorizer 지역변수</td><td class="mono">pipeline.py:37</td>
+            <td><code>get_categorizer()</code>를 호출해 받아놓고 쓰지 않음. 아래 B등급을 깨우는 유일한 호출부</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h3><span class="pill warn">B등급</span> 의도적 보존 — 문서화된 레거시</h3>
+  <p class="prose">2026-07-11 이전의 카테고리 분류 경로다. 파이프라인에서 호출되지
+  않지만 <code>docs/category-classification.md</code>에 복원 절차까지 적혀 있다.
+  비교 실험용 자산이므로 <strong>지우지 말 것</strong>.</p>
+  <div class="scroll">
+    <table>
+      <thead><tr><th>대상</th><th>위치</th><th>원래 역할</th></tr></thead>
+      <tbody>
+        <tr><td class="mono">assign_posts()</td><td class="mono">categorize.py:268</td><td>벡터 0.80 빠른 경로 + LLM 보조 배정</td></tr>
+        <tr><td class="mono">MLXCategorizer</td><td class="mono">categorize.py:198</td><td>기본형에게 후보 5개 중 선택/신규 명명을 시킴</td></tr>
+        <tr><td class="mono">StubCategorizer</td><td class="mono">categorize.py:185</td><td>LLM 없는 제목 기반 폴백</td></tr>
+        <tr><td class="mono">_candidates() · _sanitize()</td><td class="mono">categorize.py:259, 242</td><td>위 둘의 헬퍼</td></tr>
+        <tr><td class="mono">reclassify_window()</td><td class="mono">categorize.py:333</td><td>살아 있으나 UI 도달 불가 (위 참조)</td></tr>
+        <tr><td class="mono">rebuild_categories_from_analyses()</td><td class="mono">categorize.py:98</td><td>스크립트에서만 호출되는 일괄 재구성</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h3><span class="pill live">C등급</span> 대기 중 — 설정 한 줄로 살아난다</h3>
+  <p class="prose">이 시스템의 모든 무거운 부품은 <code>Protocol</code> + 구현 2종 +
+  팩토리 구조다. 라이브가 아닌 쪽은 죽은 게 아니라 <b>대기 중</b>이며,
+  <code>.env</code>의 backend 값 한 줄로 교체된다. 삭제 대상이 아니다.</p>
+  <div class="scroll">
+    <table>
+      <thead><tr><th>대체 구현</th><th>깨우는 설정</th><th>비고</th></tr></thead>
+      <tbody>
+        <tr><td class="mono">StubEmbedder</td><td class="mono">EMBEDDING_BACKEND=stub</td><td>단어 해시 벡터 — 배선 확인용</td></tr>
+        <tr><td class="mono">StubClusterer</td><td class="mono">CLUSTERING_BACKEND=stub</td><td>외부 의존성 없는 탐욕 묶기</td></tr>
+        <tr><td class="mono">StubJudge</td><td class="mono">JUDGE_BACKEND=stub</td><td>키워드 규칙</td></tr>
+        <tr><td class="mono">StubCaptioner</td><td class="mono">CAPTIONER_BACKEND=stub</td><td>이미지 무시</td></tr>
+        <tr><td class="mono">MockCollector</td><td class="mono">COLLECTOR_BACKEND=mock</td><td>가상 게시판 시뮬레이터 — 원본 DB 없이 데모 가능</td></tr>
+        <tr><td class="mono"><b>StubSummarizer</b></td><td class="mono">(자동)</td>
+            <td><b>실제로 호출된다</b> — MLX 요약이 사고 채널만 뱉고 잘리면 추출식으로 폴백 (<code>summarize.py:122</code>)</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="note">
+    <span class="note-k">정리 우선순위</span>
+    <p>A등급 4건만 지우면 된다. 총 4곳, 위험 없음. B·C등급을 "죽은 코드"로 보고
+    지우면 복원 경로와 데모 기능을 함께 잃는다.</p>
+  </div>
+</section>
+
+<section id="deaddata">
+  <div class="h2-eyebrow">감사</div>
+  <h2>죽은 데이터와 위험</h2>
+  <p class="lede">코드보다 데이터 쪽이 훨씬 심각하다. 특히 첫 항목은 지금 화면에
+  보이는 숫자의 의미를 바꾼다.</p>
+
+  <h3>① 일반·잡담 11,613건 중 9,643건은 분류 결과가 아니다</h3>
+  <div class="prose">
+    <p>가장 큰 카테고리인 <code>일반·잡담</code>의 내역을 쪼개 보면 이렇다.</p>
+
+    <div class="scroll">
+      <table>
+        <thead><tr><th>구성</th><th>건수</th><th>비중</th><th>정체</th></tr></thead>
+        <tbody>
+          <tr><td class="name">레거시 (대분류 없음)</td><td class="num">9,643</td><td class="num">83%</td>
+              <td>2026-07-09 이전 스키마. <code>major</code>·<code>topic_label</code>이 NULL이고
+              폐기된 <code>urgency</code>만 있음</td></tr>
+          <tr><td class="name">실제 adapters4 판정</td><td class="num">1,970</td><td class="num">17%</td>
+              <td>정상</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <p>레거시 행은 <code>major</code>가 NULL이라 규칙 매핑이
+    <code>category_name_from_analysis(None, None)</code>을 타고 <b>전부
+    <code>일반·잡담</code>으로 폴백</b>했다. 즉 이 9,643건은 "잡담이라고 판정된 글"이
+    아니라 <b>"판정 정보가 없어서 기본값으로 떨어진 글"</b>이다.</p>
+
+    <div class="note risk">
+      <span class="note-k">그리고 영원히 고쳐지지 않는다</span>
+      <p>분석 큐의 조건은 "<code>post_analysis</code> 행이 <b>없는</b> 글"이다. 이
+      9,643건은 (내용은 비었지만) 행이 <b>있다</b>. 따라서 큐에 영원히 잡히지 않고,
+      adapters4가 다시 읽을 일이 없다. 시간이 지나 새 글이 쌓이면 비중은 희석되지만,
+      <b>이 9,643건 자체는 스스로 회복되지 않는다.</b></p>
+      <p>고치려면 큐 조건을 "행이 없거나 <code>major IS NULL</code>인 글"로 넓히거나,
+      해당 행들을 지워 큐에 다시 태워야 한다. 어느 쪽이든 9,643건 × adapters4 호출이
+      필요하다.</p>
+    </div>
+
+    <p>참고로 실제 adapters4 판정이 있는 글은 전체 6,005건이고, 대분류 분포는
+    일반 3,720 · 밸런스 1,034 · 콘텐츠 693 · 운영 390 · 버그 90 · 과금 78이다.
+    <b>화면의 카테고리 비중을 읽을 때는 이 6,005건 기준으로 보는 것이 맞다.</b></p>
+  </div>
+
+  <h3>② 유령 카테고리 46개</h3>
+  <p class="prose">글 0건인 카테고리가 snr에 42개, solo에 4개 있다.
+  "게임 플레이 질문", "루디 활용 논의", "캐릭터 코스튬 문의", "굿즈 아이디어 제안"처럼
+  LLM이 자유롭게 짓던 시절의 이름들이다. 여기에 더해 글이 몇 건씩 남은 옛 카테고리가
+  9개(합계 36건) 더 있다. 재구성 로직이 <b>점수 이력 참조를 보존하려고 행을 지우지
+  않고</b> <code>post_count=0</code>으로만 남기기 때문에 계속 누적된다. 관제 화면은
+  글이 있는 카테고리만 그리므로 <b>표시상 문제는 없다</b>.</p>
+
+  <h3>③ 두 번째 게임은 절반만 살아 있다</h3>
+  <div class="prose">
+    <p><code>solo</code>(나혼자만레벨업어라이즈)는 등록되어 있고 수집·분석·카테고리까지
+    정상 동작한다. 그런데 <b>주제가 0개</b>다.</p>
+    <p>이유는 단순하다. 한 달 넘게 모은 글이 144건이라, 24시간 창에는 몇 건밖에 없다.
+    주제로 인정받으려면 <code>topic_min_size=6</code>을 넘겨야 하는데 도달한 적이 없다.
+    <b>주제·버스트·요약·판단·알림 계층 전체가 solo에서는 한 번도 작동한 적이 없다</b>는
+    뜻이다.</p>
+    <div class="note risk">
+      <span class="note-k">숨은 지뢰</span>
+      <p>도메인 컨텍스트(반어·밈 설명)가 <code>gemma_analyze.py</code>에
+      <b>'세븐나이츠 리버스' 하드코딩</b>이다. 요약·검증·병합·재분류의 모든 기본형
+      프롬프트가 이 문자열을 공유한다. solo에 글이 늘어 주제가 생기기 시작하면,
+      다른 게임의 글을 세븐나이츠 갤러리라고 설명하며 판정하게 된다.
+      <code>GameConfig</code>에 필드를 추가해 게임별로 주입해야 한다.</p>
+    </div>
+  </div>
+
+  <h3>④ 멀티게임 스코프 누락 3건</h3>
+  <div class="scroll">
+    <table>
+      <thead><tr><th>위치</th><th>증상</th></tr></thead>
+      <tbody>
+        <tr><td class="mono">pipeline.py:334 recluster_check()</td>
+            <td><code>load_recent_posts()</code>를 game_id 없이 호출 → 게임을 바꿔도 항상 snr 결과</td></tr>
+        <tr><td class="mono">pipeline.py:379 cosine_cluster()</td>
+            <td>동일 — <code>/cosine</code> 화면이 항상 snr 고정</td></tr>
+        <tr><td class="mono">db.py:1054 export_feedback_rows()</td>
+            <td>game 필터 자체가 없음. 게다가 화면의 다운로드 링크가
+            <code>&lt;a href&gt;</code>라 <code>api.js</code>를 우회 → <code>?game=</code>도 안 붙음.
+            결과적으로 <b>전 게임 혼합 CSV</b>가 학습 데이터로 나감</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="prose">앞의 둘은 README에 "기본 게임만 대응"이라고 명시돼 있어 알려진
+  제약이다. 세 번째는 문서화되어 있지 않고, 파인튜닝 데이터 품질에 직접 영향을 준다.</p>
+
+  <h3>⑤ 인증 없이 외부에 열려 있다</h3>
+  <div class="prose">
+    <p><code>server.log</code>에 외부 IP의 접근 기록이 남아 있다. 국내 IP의 정상적인
+    화면 사용 외에, <code>157.245.148.238</code>이
+    <code>/wp2/wp-includes/wlwmanifest.xml</code> 같은 WordPress 취약점 경로를 훑고
+    갔다. SPA 폴백이 모든 경로에 <code>index.html</code>을 돌려주므로 이 요청들은
+    전부 <b>200 OK</b>로 응답됐다.</p>
+    <div class="note risk">
+      <span class="note-k">노출된 쓰기 엔드포인트</span>
+      <p>API에 인증 계층이 전혀 없다. CORS는 <code>localhost:5173</code>으로 제한돼
+      있지만 그건 브라우저 규약일 뿐 <code>curl</code>은 막지 못한다. 특히
+      <code>POST /api/maintenance/reclassify</code>는 창 내 전체 글을 LLM으로 재분류하는
+      <b>수십 분짜리 작업</b>이라, 누구나 호출해 장비를 점유시킬 수 있다.
+      <code>POST /api/run</code>, <code>POST /api/alerts/{id}/feedback</code>(학습 데이터
+      오염)도 같은 상태다.</p>
+    </div>
+  </div>
+</section>
+
+<section id="experiment">
+  <div class="h2-eyebrow">설계 결정 기록</div>
+  <h2>검증한 대안 — adapters4를 임베딩 앞단에 놓으면?</h2>
+  <p class="lede">2026-08-17에 제기된 제안이다. 지금은 <code>제목+본문</code>을 그대로
+  임베딩하는데, <b>adapters4가 정리한 <code>topic_label</code>로 임베딩하면 노이즈가
+  걷혀 더 잘 묶이지 않겠는가.</b> 재봤고, <b>기각했다.</b> 현재 방식을 유지한다.</p>
+
+  <h3>왜 실험을 했나</h3>
+  <div class="prose">
+    <p>직관 자체는 타당하다. 디시 갤러리 원문은 반어·밈·욕설·도배가 섞여 있고,
+    adapters4의 출력은 그것이 걷힌 정제된 한 줄이다. 게다가 짧은 글("ㅇㅇ", "이거 맞냐?")도
+    라벨을 통하면 의미가 생긴다.</p>
+    <p>사전 관찰은 반대를 가리켰지만, 이 프로젝트의 임계값은 <b>전부 실측으로</b> 정해졌다.
+    추정으로 끝내지 않고 쟀다. <code>post_analysis</code>에 라벨이 이미 쌓여 있어
+    <b>라이브를 건드리지 않고</b> 오프라인 비교가 가능했다.</p>
+  </div>
+
+  <h3>방법</h3>
+  <div class="prose">
+    <p>같은 글 집합을 세 가지 임베딩 입력으로 각각 인코딩한 뒤,
+    <b>라이브와 완전히 같은 묶기 함수</b>(<code>topics._greedy_groups</code>)에 넣었다.
+    묶기 로직이 다르면 비교가 무의미해지므로 import해서 그대로 썼다.</p>
+  </div>
+
+  <div class="scroll">
+    <table>
+      <thead><tr><th>안</th><th>임베딩 입력</th><th>비고</th></tr></thead>
+      <tbody>
+        <tr><td class="name">A</td><td class="mono">posts.text</td>
+            <td>현재 라이브 방식 — 대조군. 저장된 벡터 재사용(재계산 없음)</td></tr>
+        <tr><td class="name">B</td><td class="mono">topic_label 단독</td>
+            <td>제안안. 고유 라벨만 인코딩 후 매핑</td></tr>
+        <tr><td class="name">C</td><td class="mono">posts.text + topic_label</td>
+            <td>결합안 — 원문 구별력을 유지하면서 정규화 신호를 더한다는 절충</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h4>창은 과거 구간을 썼다</h4>
+  <p class="prose">현재 24시간 창에는 글이 <b>67건</b>뿐이다(크롤링이 7월 중순 이후 멈춰
+  있다가 조사 당일 재개). 라벨이 100% 채워진 구간은 <b>2026-07-09 ~ 07-14</b>이고, 이 중
+  하루 800건 이상인 <b>07-10(1,275건) · 07-12(828건) · 07-14(904건)</b> 세 날을 각각
+  24시간 창으로 삼았다. 체리피킹을 막기 위해 셋 다 돌렸다.</p>
+
+  <div class="note why">
+    <span class="note-k">공정하게 재기 위해 필요했던 두 가지</span>
+    <p><b>① 임계값 스윕.</b> 세 안은 유사도 분포의 스케일이 다르다. 0.60 하나로 비교하면
+    불공정하므로 0.45~0.90을 0.025 간격으로 훑고, <b>"주제 수가 같아지는 지점"</b>과
+    <b>"최대 주제 크기가 같아지는 지점"</b>에서 품질을 비교했다. 이 프로젝트의 기존 교훈
+    ("캘리브레이션은 용도에 맞는 분포로")을 그대로 적용한 것이다.</p>
+    <p><b>② 응집도는 A 공간에서만 잰다.</b> 응집도(주제 안 글들이 실제로 서로 얼마나
+    비슷한가)를 각 안의 자기 공간에서 재면 B는 같은 문자열이 유사도 1.0이라 무조건
+    이긴다. 그래서 셋 다 <b>원문 임베딩 공간</b>에서 쟀다.</p>
+  </div>
+
+  <h3>결과 — 세 창 모두 현재 방식이 이겼다</h3>
+  <p class="prose">주제 수를 A와 같게 맞춘 지점의 비교다. <b>병합 배수</b>는 그 안의 주제
+  하나가 A의 주제 몇 개를 뭉뚱그리는지이고, A는 정의상 1.0이다.</p>
+
+  <div class="scroll">
+    <table>
+      <thead>
+        <tr><th>창</th><th>안</th><th>임계값</th><th>주제 수</th><th>최대 주제</th>
+            <th>응집도</th><th>병합 배수</th><th>짧은글 집중</th></tr>
+      </thead>
+      <tbody>
+        <tr><td class="name" rowspan="3">07-10<br /><span class="mono" style="font-weight:400">1,275건</span></td>
+            <td class="name">A</td><td class="num">0.600</td><td class="num">40</td>
+            <td class="num">25 (7%)</td><td class="num"><b>0.6415</b></td><td class="num">1.0</td><td class="num">2%</td></tr>
+        <tr><td class="name">B</td><td class="num">0.875</td><td class="num">37</td>
+            <td class="num">196 (22%)</td><td class="num">0.4835</td><td class="num">4.78</td><td class="num">15%</td></tr>
+        <tr><td class="name">C</td><td class="num">0.525</td><td class="num">40</td>
+            <td class="num">197 (17%)</td><td class="num">0.5151</td><td class="num">4.56</td><td class="num">21%</td></tr>
+        <tr><td class="name" rowspan="3">07-12<br /><span class="mono" style="font-weight:400">828건</span></td>
+            <td class="name">A</td><td class="num">0.600</td><td class="num">22</td>
+            <td class="num">21 (10%)</td><td class="num"><b>0.6451</b></td><td class="num">1.0</td><td class="num">4%</td></tr>
+        <tr><td class="name">B</td><td class="num">0.900</td><td class="num">22</td>
+            <td class="num">135 (26%)</td><td class="num">0.4636</td><td class="num">4.00</td><td class="num">16%</td></tr>
+        <tr><td class="name">C</td><td class="num">0.650</td><td class="num">21</td>
+            <td class="num">54 (18%)</td><td class="num">0.5238</td><td class="num">3.71</td><td class="num">11%</td></tr>
+        <tr><td class="name" rowspan="3">07-14<br /><span class="mono" style="font-weight:400">904건</span></td>
+            <td class="name">A</td><td class="num">0.600</td><td class="num">19</td>
+            <td class="num">23 (12%)</td><td class="num"><b>0.6431</b></td><td class="num">1.0</td><td class="num">5%</td></tr>
+        <tr><td class="name">B</td><td class="num">0.600</td><td class="num">19</td>
+            <td class="num">430 (51%)</td><td class="num">0.4496</td><td class="num">3.94</td><td class="num">63%</td></tr>
+        <tr><td class="name">C</td><td class="num">0.650</td><td class="num">19</td>
+            <td class="num">36 (15%)</td><td class="num">0.5232</td><td class="num">2.56</td><td class="num">7%</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <p class="prose">A는 세 창에서 응집도 <b>0.6415 · 0.6451 · 0.6431</b>로 흔들림이 없고,
+  B는 0.45~0.48, C는 0.51~0.52다. <b>순서가 한 번도 뒤집히지 않았다.</b></p>
+
+  <h3>결정적 발견 — B의 블롭은 임계값으로 깨지지 않는다</h3>
+  <p class="prose">덩어리가 너무 크면 보통 임계값을 올려 깬다. B는 안 깨진다.
+  아래는 07-10 창에서 임계값을 올려가며 <b>가장 큰 주제의 크기</b>를 추적한 것이다.</p>
+
+  <figure>
+    <div class="chart-legend">
+      <span><i style="background: var(--sA)"></i>A · 현재 방식 (posts.text)</span>
+      <span><i style="background: var(--sB)"></i>B · 라벨 단독</span>
+      <span><i style="background: var(--sC)"></i>C · 결합</span>
+    </div>
+    <div class="fig-frame chart-frame" id="sweepWrap">
+      <svg viewBox="0 0 920 400" role="img" id="sweepSvg"
+           aria-label="임계값을 0.45에서 0.90까지 올릴 때 최대 주제 크기 변화. A와 C는 0으로 떨어져 주제가 소멸하지만 B는 196건에서 평평해진다. 정확한 수치는 아래 표에 있다.">
+        <path class="grid" d="M90 330 H870" /><path class="grid" d="M90 250 H870" />
+        <path class="grid" d="M90 170 H870" /><path class="grid" d="M90 90 H870" />
+        <text class="t-sm" x="82" y="334" text-anchor="end">0</text>
+        <text class="t-sm" x="82" y="254" text-anchor="end">200</text>
+        <text class="t-sm" x="82" y="174" text-anchor="end">400</text>
+        <text class="t-sm" x="82" y="94" text-anchor="end">600</text>
+        <text class="t-hd" x="90" y="38">최대 주제 크기 (건)</text>
+        <path class="axis" d="M90 330 H870" />
+
+        <path class="ar-d" d="M350 50 V330" />
+        <text class="t-sm" x="356" y="62">라이브 임계값 0.60</text>
+
+        <polyline class="ln ln-b" points="90,64.8 133.3,106 176.7,97.6 220,108.4 263.3,200
+          306.7,202 350,190.4 393.3,217.6 436.7,221.2 480,222 523.3,223.2 566.7,224 610,246
+          653.3,246.8 696.7,250.8 740,250.8 783.3,251.2 826.7,251.6 870,251.6" />
+        <polyline class="ln ln-c" points="90,172.8 133.3,200 176.7,204.4 220,251.2 263.3,277.6
+          306.7,266.4 350,279.2 393.3,301.2 436.7,313.2 480,316.4 523.3,320.4 566.7,320.4
+          610,323.2 653.3,325.6 696.7,326.4 740,327.6" />
+        <polyline class="ln ln-a" points="90,197.6 133.3,244.4 176.7,259.2 220,290.8 263.3,301.6
+          306.7,314.8 350,320 393.3,322.8 436.7,324.8 480,325.6 523.3,326.4 566.7,326.8 610,327.6" />
+
+        <circle class="end-a" cx="610" cy="327.6" r="4.5" />
+        <circle class="end-c" cx="740" cy="327.6" r="4.5" />
+
+        <path class="ln ln-a" d="M226 282 H240" />
+        <text class="t" x="246" y="286">A · 현재 방식</text>
+        <path class="ln ln-c" d="M264 256 H278" />
+        <text class="t" x="284" y="260">C · 결합</text>
+        <path class="ln ln-b" d="M702 238 H716" />
+        <text class="t" x="722" y="242">B · 라벨 단독</text>
+
+        <text class="t-sm" x="600" y="98">B는 임계값을 0.90까지 올려도</text>
+        <text class="t-sm" x="600" y="114">196건 블롭이 깨지지 않는다</text>
+        <path class="ar-d" d="M810 124 C838 160 856 210 860 246" />
+
+        <text class="t-sm" x="90" y="352" text-anchor="middle">0.45</text>
+        <text class="t-sm" x="176.7" y="352" text-anchor="middle">0.50</text>
+        <text class="t-sm" x="263.3" y="352" text-anchor="middle">0.55</text>
+        <text class="t-sm" x="350" y="352" text-anchor="middle">0.60</text>
+        <text class="t-sm" x="436.7" y="352" text-anchor="middle">0.65</text>
+        <text class="t-sm" x="523.3" y="352" text-anchor="middle">0.70</text>
+        <text class="t-sm" x="610" y="352" text-anchor="middle">0.75</text>
+        <text class="t-sm" x="696.7" y="352" text-anchor="middle">0.80</text>
+        <text class="t-sm" x="783.3" y="352" text-anchor="middle">0.85</text>
+        <text class="t-sm" x="870" y="352" text-anchor="middle">0.90</text>
+        <text class="t-hd" x="480" y="378" text-anchor="middle">묶기 임계값</text>
+
+        <g id="sweepCross" style="display: none">
+          <path class="cross" id="sweepLine" d="M90 50 V330" />
+          <circle id="sweepDotA" r="4.5" fill="var(--sA)" />
+          <circle id="sweepDotB" r="4.5" fill="var(--sB)" />
+          <circle id="sweepDotC" r="4.5" fill="var(--sC)" />
+        </g>
+        <rect class="hit" id="sweepHit" x="90" y="50" width="780" height="280" />
+      </svg>
+      <div class="chart-tip" id="sweepTip" hidden></div>
+    </div>
+    <figcaption>임계값을 올리면 A(주황)와 C(초록)는 큰 덩어리가 깨끗하게 사라지고
+    결국 주제 자체가 소멸한다(속 빈 원 = 소멸 지점). <b>B(파랑)만 196건에서 평평해진다.</b>
+    이유는 구조적이다 — 같은 라벨을 가진 글들은 유사도가 <b>정확히 1.0</b>이라 어떤
+    임계값도 그 사이를 가를 수 없다. 임계값을 올리면 주변 글만 떨어져 나가고 덩어리
+    핵은 그대로 남는다. <b>튜닝으로 고칠 수 있는 문제가 아니다.</b></figcaption>
+  </figure>
+
+  <p class="prose">위 그래프의 원자료다. 각 칸은 <code>주제 수 / 최대 주제 크기</code>이고
+  "—"는 그 임계값에서 최소 크기(6건)를 넘는 묶음이 하나도 없다는 뜻이다.</p>
+
+  <div class="scroll">
+    <table>
+      <thead><tr><th>임계값</th><th>A · 현재 방식</th><th>B · 라벨 단독</th><th>C · 결합</th></tr></thead>
+      <tbody>
+        <tr><td class="mono">0.450</td><td class="num">45 / 331</td><td class="num">7 / 663</td><td class="num">15 / 393</td></tr>
+        <tr><td class="mono">0.475</td><td class="num">56 / 214</td><td class="num">9 / 560</td><td class="num">23 / 325</td></tr>
+        <tr><td class="mono">0.500</td><td class="num">62 / 177</td><td class="num">15 / 581</td><td class="num">32 / 314</td></tr>
+        <tr><td class="mono">0.525</td><td class="num">57 / 98</td><td class="num">17 / 554</td><td class="num">40 / 197</td></tr>
+        <tr><td class="mono">0.550</td><td class="num">53 / 71</td><td class="num">15 / 325</td><td class="num">53 / 131</td></tr>
+        <tr><td class="mono">0.575</td><td class="num">51 / 38</td><td class="num">18 / 320</td><td class="num">50 / 159</td></tr>
+        <tr><td class="mono"><b>0.600</b></td><td class="num"><b>40 / 25</b></td><td class="num">22 / 349</td><td class="num">48 / 127</td></tr>
+        <tr><td class="mono">0.625</td><td class="num">23 / 18</td><td class="num">25 / 281</td><td class="num">53 / 72</td></tr>
+        <tr><td class="mono">0.650</td><td class="num">13 / 13</td><td class="num">24 / 272</td><td class="num">44 / 42</td></tr>
+        <tr><td class="mono">0.675</td><td class="num">6 / 11</td><td class="num">31 / 270</td><td class="num">36 / 34</td></tr>
+        <tr><td class="mono">0.700</td><td class="num">1 / 9</td><td class="num">33 / 267</td><td class="num">29 / 24</td></tr>
+        <tr><td class="mono">0.725</td><td class="num">1 / 8</td><td class="num">30 / 265</td><td class="num">21 / 24</td></tr>
+        <tr><td class="mono">0.750</td><td class="num">1 / 6</td><td class="num">32 / 210</td><td class="num">15 / 17</td></tr>
+        <tr><td class="mono">0.775</td><td class="num">—</td><td class="num">32 / 208</td><td class="num">6 / 11</td></tr>
+        <tr><td class="mono">0.800</td><td class="num">—</td><td class="num">34 / 198</td><td class="num">4 / 9</td></tr>
+        <tr><td class="mono">0.825</td><td class="num">—</td><td class="num">35 / 198</td><td class="num">1 / 6</td></tr>
+        <tr><td class="mono">0.850</td><td class="num">—</td><td class="num">36 / 197</td><td class="num">—</td></tr>
+        <tr><td class="mono">0.875</td><td class="num">—</td><td class="num">37 / 196</td><td class="num">—</td></tr>
+        <tr><td class="mono">0.900</td><td class="num">—</td><td class="num">32 / 196</td><td class="num">—</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h3>왜 이렇게 되는가</h3>
+  <div class="prose">
+    <p>원인은 라벨의 카디널리티다. <code>topic_label</code> 6,024건 중 고유값은
+    <b>1,495개뿐</b>이고, 상위 9개 라벨이 전체의 <b>40%(2,423건)</b>를 먹는다.
+    가장 큰 것은 <code>[일반] 캐릭터 육성 및 장비 세팅 질문</code> <b>762건</b>이다.</p>
+
+    <div class="scroll">
+      <table>
+        <thead><tr><th>major</th><th>라벨당 평균 글 수</th><th>최대 덩어리</th><th>판정</th></tr></thead>
+        <tbody>
+          <tr><td class="name">일반</td><td class="num">6.93</td><td class="num">762</td>
+              <td><span class="pill alarm">붕괴</span> 글의 62%가 여기</td></tr>
+          <tr><td class="name">밸런스</td><td class="num">3.55</td><td class="num">153</td><td><span class="pill warn">위험</span></td></tr>
+          <tr><td class="name">콘텐츠</td><td class="num">2.39</td><td class="num">71</td><td><span class="pill warn">위험</span></td></tr>
+          <tr><td class="name">운영</td><td class="num">1.74</td><td class="num">50</td><td><span class="pill live">양호</span></td></tr>
+          <tr><td class="name">버그</td><td class="num">1.14</td><td class="num">12</td><td><span class="pill live">양호</span></td></tr>
+          <tr><td class="name">과금</td><td class="num">1.10</td><td class="num">7</td><td><span class="pill live">양호</span></td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <p>버그·과금·운영은 라벨이 거의 1:1이라 사건을 잘 구별한다. <code>[밸런스] 각성 델론즈
+    성능 및 퀄리티(더빙, 타격감)에 대한 실망과 공덱 우려</code>(72건) 같은 라벨은 훌륭하다.
+    <b>무너지는 것은 '일반' 계열이고, 그게 글의 62%다.</b></p>
+
+    <p>그리고 이건 새로운 실패가 아니다. <a href="#pipeline">04단계</a>에 적힌 캡션
+    정형화 사고 — LLM이 만든 정형 문구("...완료 화면으로 점수를 보여준다")가 무관한 인증글
+    52건을 한 덩어리로 만든 건 — 과 <b>같은 메커니즘</b>이다. 짧은글 집중 지표가 그것을
+    확인해준다: A는 2~5%인데 B는 15~63%다.</p>
+
+    <div class="note why">
+      <span class="note-k">결합안(C)도 기각된 이유 — 예상과 달랐다</span>
+      <p>C는 원문의 구별력을 유지할 것으로 기대했으나 실측은 A보다 나빴다. 최대 주제
+      크기를 A와 맞춘 지점에서도 응집도가 0.53~0.58로 A의 0.64에 못 미치고, 병합 배수는
+      2.4~3.1이다. 07-12 창에서는 임계값 0.800에서 <b>주제가 1개로 붕괴</b>했다.</p>
+      <p>짧은 글만의 문제도 아니다. 주제 수를 맞춘 지점에서 C의 짧은글 집중은 07-10 창
+      기준 <b>21%</b>로 A(2%)보다 훨씬 높았다. 모든 글에 공통 라벨 성분이 더해지면서
+      <b>유사도가 상향 평준화되어 구별이 흐려지는</b> 쪽으로 보인다. C의 최적 임계값이
+      창마다 0.525~0.800으로 크게 흔들리는 것도 같은 신호다.</p>
+    </div>
+
+    <p><b>결론.</b> 라벨은 "정리"가 아니라 <b>"일반화"</b>이고, 일반화는 구별 정보를 버리는
+    연산이다. 주제 묶기는 구별이 전부인 작업이라 정면으로 충돌한다. 원문으로 묶고 라벨은
+    카테고리와 판단 입력에만 쓰는 현재 구조가 데이터상 맞다. <b>변경하지 않는다.</b></p>
+
+    <p>구조적 이유도 하나 더 있다. adapters4를 앞단에 놓으면 임베딩이 LLM 큐(분당 15건)에
+    종속되어 버스트 때 <b>주제 묶기 자체가 멈춘다</b>. 파싱 3회 실패분과
+    <a href="#deaddata">레거시 9,643건</a>은 라벨이 없어 아예 배제된다.</p>
+  </div>
+
+  <h3>재현</h3>
+  <pre><code>uv run python scripts/exp_label_embedding.py                      # 창 3개 전부
+uv run python scripts/exp_label_embedding.py --window 2026-07-10  # 단일 창
+
+# 산출물
+data/exp/label-embedding/report.md    # 창별 스윕표 + 두 가지 맞춤 지점 비교
+data/exp/label-embedding/raw.json     # 원자료 (다른 지표로 재분석용)</code></pre>
+  <p class="prose">스크립트는 <code>pipeline.db</code>를 <code>mode=ro</code>로 열고 아무것도
+  쓰지 않는다. 임베딩을 캐시하므로 재실행은 즉시 끝난다. 실행 전후로
+  <code>topics</code> 행 수와 <code>posts.topic_id</code> 건수가 동일함을 확인했다
+  (<code>144 / 1,962</code> 불변).</p>
+</section>
+
+<section id="verify">
+  <div class="h2-eyebrow">부록</div>
+  <h2>직접 확인하는 법</h2>
+  <p class="lede">이 문서의 모든 수치는 아래 명령으로 재현된다. 시간이 지나면 값은
+  변하지만 구조는 같다.</p>
+
+  <h4>지금 무엇이 서빙 중인가</h4>
+  <pre><code>curl -s localhost:8007/api/status | python3 -m json.tool</code></pre>
+
+  <h4>임베딩 차원 (모델 확인)</h4>
+  <pre><code>sqlite3 -readonly data/pipeline.db \
+  "SELECT DISTINCT length(embedding)/4 FROM posts WHERE embedding IS NOT NULL;"
+# 1024 → KURE-v1 · 768 → EmbeddingGemma 계열</code></pre>
+
+  <h4>레거시 분석 행 (죽은 데이터 ①)</h4>
+  <pre><code>sqlite3 -readonly data/pipeline.db \
+  "SELECT major IS NULL AS legacy, COUNT(*) FROM post_analysis GROUP BY legacy;"</code></pre>
+
+  <h4>유령 카테고리 (죽은 데이터 ②)</h4>
+  <pre><code>sqlite3 -readonly data/pipeline.db \
+  "SELECT game_id, COUNT(*) FROM categories WHERE post_count = 0 GROUP BY game_id;"</code></pre>
+
+  <h4>게임별 주제 형성 여부 (죽은 데이터 ③)</h4>
+  <pre><code>sqlite3 -readonly data/pipeline.db \
+  "SELECT game_id, COUNT(*) FROM topics GROUP BY game_id;"</code></pre>
+
+  <h4>A등급 죽은 코드 재확인</h4>
+  <pre><code>grep -rn "mark_category_alerted\|load_games\|same_topic_sim" app/ scripts/
+# 정의부 3줄 외에 아무것도 나오지 않으면 미호출 확정</code></pre>
+
+  <hr />
+
+  <footer>
+    조사 방법 — 백엔드 21개 파일과 프론트 32개 파일 전량 열람, 심볼 단위 호출 그래프
+    확인(grep 역참조), 가동 중인 서버의 <code>/api/status</code>·<code>/api/games</code>
+    응답, <code>data/pipeline.db</code> 직접 조회(읽기 전용), <code>server.log</code>
+    접근 기록 분석.<br />
+    확인하지 못한 것 — <code>.env</code> 파일 원문(읽기 권한 거부). 실제 설정값은
+    가동 중인 서버의 <code>/api/status</code> 응답으로 대체 확인했다.
+  </footer>
+</section>
+
+</main>
+</div>
+
+<script>
+// 임계값 스윕 차트의 호버 레이어 — 십자선 + 툴팁.
+// 같은 수치가 바로 아래 표에도 있으므로, 이 스크립트가 없어도 정보 손실은 없다.
+(function () {
+  var svg = document.getElementById('sweepSvg');
+  var hit = document.getElementById('sweepHit');
+  var cross = document.getElementById('sweepCross');
+  var line = document.getElementById('sweepLine');
+  var tip = document.getElementById('sweepTip');
+  var wrap = document.getElementById('sweepWrap');
+  if (!svg || !hit || !cross || !line || !tip || !wrap) return;
+
+  var TH = [0.450, 0.475, 0.500, 0.525, 0.550, 0.575, 0.600, 0.625, 0.650, 0.675,
+            0.700, 0.725, 0.750, 0.775, 0.800, 0.825, 0.850, 0.875, 0.900];
+  var SERIES = [
+    { k: 'A', name: 'A · 현재 방식', v: '--sA',
+      d: [331, 214, 177, 98, 71, 38, 25, 18, 13, 11, 9, 8, 6, null, null, null, null, null, null] },
+    { k: 'B', name: 'B · 라벨 단독', v: '--sB',
+      d: [663, 560, 581, 554, 325, 320, 349, 281, 272, 270, 267, 265, 210, 208, 198, 198, 197, 196, 196] },
+    { k: 'C', name: 'C · 결합', v: '--sC',
+      d: [393, 325, 314, 197, 131, 159, 127, 72, 42, 34, 24, 24, 17, 11, 9, 6, null, null, null] }
+  ];
+  var dot = {
+    A: document.getElementById('sweepDotA'),
+    B: document.getElementById('sweepDotB'),
+    C: document.getElementById('sweepDotC')
+  };
+  var X0 = 90, STEP = 780 / 18, VW = 920, LAST = TH.length - 1;
+
+  function show(e) {
+    var r = svg.getBoundingClientRect();
+    var wr = wrap.getBoundingClientRect();
+    if (!r.width) return;
+    var i = Math.round(((e.clientX - r.left) / r.width * VW - X0) / STEP);
+    if (i < 0) i = 0;
+    if (i > LAST) i = LAST;
+
+    var x = X0 + i * STEP;
+    line.setAttribute('d', 'M' + x.toFixed(1) + ' 50 V330');
+
+    var rows = '';
+    for (var n = 0; n < SERIES.length; n++) {
+      var s = SERIES[n], val = s.d[i], c = dot[s.k];
+      if (val == null) {
+        c.style.display = 'none';
+      } else {
+        c.style.display = '';
+        c.setAttribute('cx', x.toFixed(1));
+        c.setAttribute('cy', (330 - val * 0.4).toFixed(1));
+      }
+      rows += '<span style="color:var(' + s.v + ')">■</span> ' + s.name
+            + '<u></u>' + (val == null ? '주제 없음' : val + '건') + '<br />';
+    }
+    cross.style.display = '';
+    tip.innerHTML = '<b>임계값 ' + TH[i].toFixed(3) + '</b>' + rows;
+    tip.hidden = false;
+
+    // 프레임 기준 좌표로 환산 후, 좌우 끝에서 잘리지 않게 가둔다
+    var left = (r.left - wr.left) + x / VW * r.width;
+    var pad = 96;
+    tip.style.left = Math.max(pad, Math.min(wr.width - pad, left)) + 'px';
+    tip.style.top = '10px';
+  }
+
+  function hide() {
+    cross.style.display = 'none';
+    tip.hidden = true;
+  }
+
+  hit.addEventListener('pointerenter', show);
+  hit.addEventListener('pointermove', show);
+  hit.addEventListener('pointerleave', hide);
+  svg.addEventListener('pointerleave', hide);
+})();
+</script>

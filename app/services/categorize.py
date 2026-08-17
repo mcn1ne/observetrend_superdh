@@ -3,7 +3,7 @@
 **현재(활성) 경로 — adapters4 규칙매핑**: `gemma_analyze.analyze_batch()`가 글당
 adapters4 1회 호출로 얻은 major+topic_label을 `assign_from_analysis()`가 규칙
 매핑(`MAJOR_CATEGORY_MAP`/`_BUILD_KEYWORDS`)해 즉시 확정한다. 이 경로는 추가
-LLM 호출이 없다. 상세·역사·복원 방법은 `docs/category-classification.md` 참고.
+LLM 호출이 없다.
 
 **이전 경로 — 벡터 1차 매칭 + LLM 보조 명명 (`assign_posts`/`MLXCategorizer`,
 아래 보존, 현재 파이프라인에서는 호출되지 않음)**:
