@@ -1,14 +1,20 @@
-"""영속 카테고리 분류 — 하이브리드 (벡터 1차 매칭 + LLM 보조 명명).
+"""영속 카테고리 분류.
 
-새 글 배정 흐름:
+**현재(활성) 경로 — adapters4 규칙매핑**: `gemma_analyze.analyze_batch()`가 글당
+adapters4 1회 호출로 얻은 major+topic_label을 `assign_from_analysis()`가 규칙
+매핑(`MAJOR_CATEGORY_MAP`/`_BUILD_KEYWORDS`)해 즉시 확정한다. 이 경로는 추가
+LLM 호출이 없다. 상세·역사·복원 방법은 `docs/category-classification.md` 참고.
+
+**이전 경로 — 벡터 1차 매칭 + LLM 보조 명명 (`assign_posts`/`MLXCategorizer`,
+아래 보존, 현재 파이프라인에서는 호출되지 않음)**:
     1) 임베딩 ↔ 기존 카테고리 중심벡터 코사인 유사도 계산 (VectorDB 역할)
     2) 최고 유사도 ≥ category_assign_sim → 즉시 그 카테고리에 적재 (LLM 호출 없음)
     3) 미달 → Gemma 4 기본형에게 상위 후보 k개를 보여주고
        "후보 중 선택 or 신규 카테고리 명명"을 요청
     4) 신규면 카테고리 생성 (이 글의 벡터가 초기 중심벡터)
 
-카테고리 중심벡터는 글이 배정될 때마다 이동 평균으로 갱신 후 재정규화한다.
-카테고리 증식은 1)의 벡터 매칭과 3)의 "후보 우선 선택" 프롬프트가 억제한다.
+카테고리 중심벡터는 (두 경로 공통) 글이 배정될 때마다 이동 평균으로 갱신 후
+재정규화하며, `category_centroid_max_n`에서 동결한다.
 """
 import re
 from typing import Protocol
@@ -30,6 +36,141 @@ _SYSTEM = (
     "- 나쁜 예: 특정 캐릭터명·수치·말줄임이 든 글 제목 그대로\n"
     "설명 없이 카테고리 이름만 한 줄로 출력한다."
 )
+
+# ── 운영 카테고리: adapters4 1회 분석 결과로 결정 ──────────────────
+# major가 명확한 5개 영역은 그대로 큰 서랍으로 매핑한다. '일반'만 topic_label의
+# 세부 의미를 이용해 육성/세팅 질문과 나머지 잡담을 나눈다. 자유형 label 문자열을
+# 카테고리 이름으로 직접 쓰지 않아 카테고리 폭증을 막는다.
+MAJOR_CATEGORY_MAP = {
+    "콘텐츠": "콘텐츠·공략",
+    "운영": "운영·이벤트",
+    "밸런스": "밸런스",
+    "과금": "과금",
+    "버그": "버그·오류",
+}
+_BUILD_KEYWORDS = (
+    "캐릭터", "헌터", "육성", "장비", "세팅", "셋팅", "덱", "스킬",
+    "무기", "아티", "아티팩트", "돌파", "초월", "강화", "조합",
+)
+
+
+def category_name_from_analysis(major: str | None, topic_label: str | None) -> str:
+    """adapters4의 major+topic_label을 영속 대분류 이름으로 변환한다."""
+    if major in MAJOR_CATEGORY_MAP:
+        return MAJOR_CATEGORY_MAP[major]
+    label = topic_label or ""
+    if any(k in label for k in _BUILD_KEYWORDS):
+        return "캐릭터·장비·덱"
+    return "일반·잡담"
+
+
+def assign_from_analysis(post: dict, analysis: dict, game_id: str | None = None) -> int:
+    """adapters4 결과 1건으로 카테고리를 배정하고 중심벡터를 갱신한다.
+
+    기본형 LLM은 호출하지 않는다. 같은 분석 결과를 post_analysis 저장과 카테고리
+    배정에 함께 사용하므로 글당 Gemma 호출은 adapters4 한 번뿐이다.
+    """
+    game_id = game_id or post.get("game_id") or settings.default_game_id
+    name = category_name_from_analysis(analysis.get("major"), analysis.get("topic_label"))
+    vec = post.get("embedding")
+    if vec is None:
+        raise ValueError("카테고리 배정에는 게시글 임베딩이 필요합니다")
+
+    category = db.find_category_by_name(name, game_id)
+    if category is None:
+        category_id = db.create_category(name, vec, game_id)
+        category = db.find_category_by_name(name, game_id)
+    else:
+        category_id = category["id"]
+
+    db.assign_category(post["id"], category_id, game_id)
+    n = category["post_count"]
+    centroid = category["centroid"]
+    if n < settings.category_centroid_max_n:
+        centroid = (centroid * n + vec) / (n + 1)
+        norm = np.linalg.norm(centroid)
+        if norm > 0:
+            centroid = centroid / norm
+    db.update_category_centroid(category_id, centroid, n + 1)
+    return category_id
+
+
+def rebuild_categories_from_analyses(game_id: str | None = None) -> dict:
+    """저장된 adapters4 결과 전체로 한 게임의 카테고리를 멱등 재구성한다.
+
+    기존 자유형 카테고리 행은 점수 이력 참조 보존을 위해 삭제하지 않고, 현재 글이
+    하나도 없으면 post_count=0으로 남긴다. 반복 실행해도 실제 posts 배정에서 다시
+    집계하므로 카운트가 부풀지 않는다.
+    """
+    game_id = game_id or settings.default_game_id
+    with db._connect() as conn:
+        rows = conn.execute(
+            "SELECT p.id, p.embedding, a.major, a.topic_label "
+            "FROM posts p JOIN post_analysis a "
+            "ON a.game_id=p.game_id AND a.post_id=p.id "
+            "WHERE p.game_id=? AND p.embedding IS NOT NULL",
+            (game_id,),
+        ).fetchall()
+
+        category_ids: dict[str, int] = {}
+        for r in rows:
+            name = category_name_from_analysis(r["major"], r["topic_label"])
+            if name not in category_ids:
+                found = conn.execute(
+                    "SELECT id FROM categories WHERE game_id=? AND name=?",
+                    (game_id, name),
+                ).fetchone()
+                if found:
+                    category_ids[name] = found["id"]
+                else:
+                    vec = np.frombuffer(r["embedding"], dtype=np.float32)
+                    now = db._now()
+                    cur = conn.execute(
+                        "INSERT INTO categories (game_id,name,centroid,post_count,created_at,updated_at) "
+                        "VALUES (?,?,?,?,?,?)",
+                        (game_id, name, vec.tobytes(), 0, now, now),
+                    )
+                    category_ids[name] = cur.lastrowid
+            conn.execute(
+                "UPDATE posts SET category_id=? WHERE game_id=? AND id=?",
+                (category_ids[name], game_id, r["id"]),
+            )
+
+        # 모든 카테고리의 count/centroid를 현재 실제 배정에서 다시 계산한다.
+        categories = conn.execute(
+            "SELECT id FROM categories WHERE game_id=?", (game_id,)
+        ).fetchall()
+        now = db._now()
+        for c in categories:
+            vectors = conn.execute(
+                "SELECT embedding FROM posts WHERE game_id=? AND category_id=? "
+                "AND embedding IS NOT NULL ORDER BY created_at LIMIT ?",
+                (game_id, c["id"], settings.category_centroid_max_n),
+            ).fetchall()
+            actual = conn.execute(
+                "SELECT COUNT(*) FROM posts WHERE game_id=? AND category_id=?",
+                (game_id, c["id"]),
+            ).fetchone()[0]
+            if vectors:
+                centroid = np.mean(
+                    np.stack([np.frombuffer(v["embedding"], dtype=np.float32) for v in vectors]),
+                    axis=0,
+                )
+                norm = np.linalg.norm(centroid)
+                if norm > 0:
+                    centroid = centroid / norm
+                conn.execute(
+                    "UPDATE categories SET centroid=?,post_count=?,updated_at=? WHERE id=?",
+                    (centroid.astype(np.float32).tobytes(), actual, now, c["id"]),
+                )
+            else:
+                conn.execute(
+                    "UPDATE categories SET post_count=0,updated_at=? WHERE id=?",
+                    (now, c["id"]),
+                )
+
+    return {"game_id": game_id, "reassigned": len(rows),
+            "active_categories": len(category_ids), "categories": sorted(category_ids)}
 
 
 class Categorizer(Protocol):
@@ -124,13 +265,15 @@ def _candidates(vec: np.ndarray, categories: list[dict], k: int) -> list[dict]:
     return scored[:k]
 
 
-def assign_posts(posts: list[dict]) -> dict:
-    """카테고리 미배정 글들을 배정. posts: [{id,title,text,embedding}]
+def assign_posts(posts: list[dict], game_id: str | None = None) -> dict:
+    """카테고리 미배정 글들을 배정. posts: [{id,title,text,embedding[,game_id]}]
 
+    카테고리는 game_id 파티션이라 그 게임의 카테고리 안에서만 배정/생성한다.
     반환: {assigned_fast, assigned_llm, created} 카운트
     """
+    game_id = game_id or settings.default_game_id
     categorizer = get_categorizer()
-    categories = db.load_categories()
+    categories = db.load_categories(game_id)
     stats = {"assigned_fast": 0, "assigned_llm": 0, "created": 0}
 
     for post in posts:
@@ -143,16 +286,16 @@ def assign_posts(posts: list[dict]) -> dict:
         else:
             name = categorizer.pick_or_create_name(post, cands)  # 2차: LLM 보조
             existing = next((c for c in categories if c["name"] == name), None) \
-                or db.find_category_by_name(name)
+                or db.find_category_by_name(name, game_id)
             if existing:
                 target_id = existing["id"]
                 stats["assigned_llm"] += 1
             else:
-                target_id = db.create_category(name, vec)    # 신규 카테고리
-                categories = db.load_categories()            # 캐시 갱신
+                target_id = db.create_category(name, vec, game_id)  # 신규 카테고리
+                categories = db.load_categories(game_id)            # 캐시 갱신
                 stats["created"] += 1
 
-        db.assign_category(post["id"], target_id)
+        db.assign_category(post["id"], target_id, game_id)
 
         # 중심벡터 이동 평균 갱신 + 재정규화.
         # ⚠️ post_count 가 상한을 넘으면 동결 — 계속 갱신하면 중심이 "게시판

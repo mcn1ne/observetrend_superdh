@@ -6,8 +6,10 @@
 
 - 백엔드: **FastAPI + uv** / 프론트: **Vue 3 + Vite (MVVM)**
 - 수집: **etl_dcinside/dcinside.db 연동** ✅ (DB1 → post_no 증분, 읽기 전용)
-- ① 임베딩: **EmbeddingGemma** ✅ · ② 분류: **Gemma 4 하이브리드** ✅ · ④ 판단: **파인튜닝 4B (adapters3)** ✅
-- 슬롯(미준비): 이미지 캡셔닝(stub) · 요약(stub 추출식)
+- ① 임베딩: **KURE-v1** ✅ · ② 분류: **Gemma 4 adapters4 1회** ✅ · ④ 판단: **파인튜닝 4B (adapters3)** ✅
+- 이미지 캡셔닝: **mlx-vlm (Gemma 4 멀티모달)** ✅ — 비동기 캡션 워커가 첨부 최대 3장을 장별 묘사해 재임베딩 (글당 ~2초 실측)
+- 슬롯(미준비): 요약(stub 추출식)
+- **멀티게임**: `game_id` 파티션으로 여러 게임을 한 프로세스에서 관제(`app/config.py`의 `settings.games`). 현재 세븐나이츠 리버스(`snr`)·나혼자만레벨업어라이즈(`solo`) 2개 등록. 같은 DB1을 여러 게임이 공유하므로 게임별 `source_game`(정확 일치)+선택적 `source_gallery` 필터로 격리한다.
 
 > **Qdrant(etl_dcinside/qdrant_storage)를 안 쓰는 이유**: 그 벡터는 Gemini API
 > (`gemini-embedding-2`) 공간이라 본 시스템의 EmbeddingGemma(로컬) 공간과 호환되지
@@ -16,7 +18,7 @@
 
 ---
 
-## 아키텍처 (영속 카테고리 하이브리드)
+## 아키텍처 (adapters4 단일 호출 카테고리)
 
 ```
 [DB1/수집원] ──매 1분──▶ 전처리(02) ─▶ DB2(SQLite) 적재
@@ -25,14 +27,12 @@
                   (이미지 있으면 캡셔닝 → 텍스트에 포함)
                               │
                               ▼
-                  EmbeddingGemma 임베딩(03) — 새 글만 1회, 벡터 DB 저장
+                  KURE-v1 임베딩(03) — 새 글만 1회, 벡터 DB 저장
                               │
                               ▼
-              ┌─ 카테고리 배정 (하이브리드) ──────────────────┐
-              │ 1차: 기존 카테고리 중심벡터 유사도 ≥ 0.82     │
-              │      → 즉시 적재 (LLM 호출 없음, 대부분의 글) │
-              │ 2차: 미달 → Gemma 4 기본형이 후보 중 선택     │
-              │      or 신규 카테고리 명명·생성               │
+              ┌─ adapters4 글 분석 (글당 Gemma 호출 1회) ─────┐
+              │ topic_label___major___sentiment 출력           │
+              │ major + topic_label 규칙 → 7개 영속 카테고리  │
               └───────────────────────────────────────────────┘
                               │
                               ▼  (매 1분 분석)
@@ -48,15 +48,12 @@
   * HDBSCAN(04)은 안전망: 재클러스터링으로 카테고리 중복(병합 후보)·누락 점검
 ```
 
-**분류의 역할 분담 (실측으로 확정)**: **카테고리(대분류)의 주 배정자는 LLM**이다.
-대분류 소속 판정은 의미 판단이라 벡터 기하로는 불가능함이 실측됨 — 글↔자기
-카테고리 중심(0.661)과 글↔남의 중심(0.653)이 안 갈려서, 어떤 임계값에서도
-통과율 ≈ 오배정률. 벡터 빠른 경로(`CATEGORY_ASSIGN_SIM=0.80`)는 사실상 같은
-글(도배 등)만 통과시키는 지름길이다. 반면 **주제(topic)는 벡터 담당** — 조밀한
-묶음은 기하로 정확히 잡힌다 (KURE-v1 기준 NN 순도 81%).
-Gemma 분류 워커(`services/gemma_analyze.py`, 큐 기반 배치)가 모든 글을 읽고
-카테고리 배정 + 감정·긴급도·요지를 기록한다. 폭증 시 큐에 쌓였다가 전부
-소화되므로 유실이 없다.
+**분류의 역할 분담**: adapters4 워커(`services/gemma_analyze.py`)가 모든 글을
+한 번 읽고 `topic_label · major · sentiment`를 저장한다. 카테고리는 이 결과의
+`major + topic_label`을 규칙 매핑해 정하므로 기본형 Gemma를 추가 호출하지 않는다.
+세부 사건인 **주제(topic)는 벡터 담당**이다. 큐가 폭증해도 DB에 남아 순차적으로
+소화되므로 유실이 없다. 이전의 벡터 빠른 경로 + 기본형 후보 선택 방식과 복원법은
+`docs/category-classification.md`에 보존한다.
 
 **카테고리는 영속 자산이다.** 클러스터 번호(매 실행마다 바뀜)와 달리 id·이름·
 중심벡터가 유지되므로, 쿨다운·점수 이력·기준선을 카테고리 단위로 안정적으로
@@ -97,9 +94,9 @@ sqlite3 dcinside.db < schema/dcinside_source.sql
 |---|---|---|
 | 수집 | `services/collect.py` | ✅ dcinside.db 증분 (`DCINSIDE_BACKFILL_HOURS=72` 소급) / mock 전환 가능 |
 | 전처리 (02) | `services/preprocess.py` | ✅ |
-| 이미지 캡셔닝 | `services/caption.py` | 🔶 **슬롯** — `uv sync --extra vision` + `CAPTIONER_BACKEND=mlx-vlm` |
+| 이미지 캡셔닝 | `services/caption.py` | ✅ mlx-vlm 비동기 워커 — [첨부] URL 최대 3장 다운로드(Referer 필수)→장별 묘사→재임베딩. 소급은 `scripts/backfill_image_urls.py` |
 | ① 임베딩 (03) | `services/embedding.py` | ✅ EmbeddingGemma |
-| ② 카테고리 분류 | `services/categorize.py` | ✅ 하이브리드 (벡터 + Gemma 4 명명) |
+| ② 카테고리 분류 | `services/categorize.py` | ✅ adapters4 1회 분석의 major + topic_label 규칙 매핑 |
 | ③ 요약 (05) | `services/summarize.py` | 🔶 stub 추출식 / `SUMMARIZER_BACKEND=mlx` |
 | ④ 알림 판단 (06) | `services/judge.py` | ✅ 파인튜닝 4B (adapters3) |
 | 점수·버스트 (08) | `services/detection.py` | ✅ 감쇠 반감기 30분 |
@@ -110,7 +107,7 @@ sqlite3 dcinside.db < schema/dcinside_source.sql
 
 | 키 | 기본값 | 의미 |
 |---|---|---|
-| `CATEGORY_ASSIGN_SIM` | 0.85 | 벡터 즉시 배정 유사도. **낮으면 과병합·높으면 LLM 호출↑** (핵심 튜닝) |
+| `CATEGORY_ASSIGN_SIM` | 0.80 | (레거시 경로용) 벡터 즉시 배정 유사도 — 현재 실배정은 adapters4 규칙매핑이 담당 |
 | `CATEGORY_CANDIDATES_K` | 5 | LLM에게 보여줄 기존 카테고리 후보 수 |
 | `CATEGORY_CENTROID_MAX_N` | 50 | 중심벡터 갱신 상한(동결). 계속 갱신하면 "게시판 평균" 방향으로 표류해 블랙홀 카테고리가 됨 |
 | `COOLDOWN_MIN` | 60 | 같은 카테고리 재알림 금지(분) |
@@ -122,8 +119,8 @@ sqlite3 dcinside.db < schema/dcinside_source.sql
 
 - **판정 로그**: `data/judge_log.jsonl` (오탐/미탐 모니터링, 문서 06)
 - **점수 이력**: `category_scores` 테이블 (7일 보관, 스파크라인 데이터)
-- **안전망 점검**: 관제 화면 버튼 or `POST /api/maintenance/recluster-check` — 하루 1회 권장.
-  "병합 검토" 제안이 반복되면 `CATEGORY_ASSIGN_SIM`을 낮추거나 카테고리를 수동 정리
+- **안전망 점검**: 관제 화면 버튼 or `POST /api/maintenance/recluster-check` — 하루 1회 권장(기본 게임만 대응).
+  "병합 검토" 제안이 반복되면 `MAJOR_CATEGORY_MAP`/키워드 규칙을 점검하거나 카테고리를 수동 정리
 - **Gemma 4 사고 채널**: 기본형 모델이 `<|channel|>thought`를 출력할 수 있어
   `categorize._sanitize`가 final 채널만 취한다 (잘림 시 폴백)
 - **MLX 스레드 규칙**: 모든 MLX 추론은 `services/mlx_runtime.py`의 전용 단일 스레드로.

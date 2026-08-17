@@ -3,12 +3,19 @@
 import { useRouter } from 'vue-router'
 import HeatBar from './HeatBar.vue'
 
-defineProps({
+const props = defineProps({
   topic: Object,
   maxHeat: { type: Number, default: 1 },
+  // 타임머신 재생: 스냅샷 시각 — 있으면 상세를 "당시 구성" 모드로 연다
+  at: { type: String, default: '' },
 })
 
 const router = useRouter()
+
+function openDetail() {
+  const query = props.at ? { at: props.at } : {}
+  router.push({ path: `/topics/${props.topic.topic_id}`, query })
+}
 
 function timeAgo(iso) {
   if (!iso) return ''
@@ -23,8 +30,8 @@ function timeAgo(iso) {
   <div class="card topic-card"
     :class="{ burst: topic.is_burst, alerted: topic.decision === 'O' }"
     role="link" tabindex="0"
-    @click="router.push(`/topics/${topic.topic_id}`)"
-    @keydown.enter="router.push(`/topics/${topic.topic_id}`)">
+    @click="openDetail"
+    @keydown.enter="openDetail">
     <div class="head">
       <div class="title-area">
         <strong class="topic-name">{{ topic.name }}</strong>

@@ -15,6 +15,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Protocol
 from zoneinfo import ZoneInfo
 
+from app import db
 from app.config import settings
 
 _KST = ZoneInfo("Asia/Seoul")
@@ -178,7 +179,7 @@ class MockCollector:
 # ── 디씨인사이드 수집기 (DB1 = etl_dcinside/dcinside.db) ─────────────
 
 class DcinsideCollector:
-    """DB1에서 post_no 증분으로 새 글을 읽는다.
+    """DB1에서 원본 게임명(+선택 갤러리)으로 격리해 새 글을 읽는다.
 
     - 크롤러가 DB1에 계속 적재 중이므로 읽기 전용(URI mode=ro)으로 연다.
     - post_time 은 KST 로컬 시각 문자열("YYYY-MM-DD HH:MM:SS")
@@ -187,14 +188,18 @@ class DcinsideCollector:
       (분석 창은 24h — 몇 달치 옛글에 임베딩·분류 비용을 쓰지 않기 위함).
     """
 
-    def __init__(self) -> None:
-        self._last_post_no = 0
-        self._initialized = False
+    def __init__(self, game_id: str, source_db_path: str, source_game: str,
+                 source_gallery: str | None = None) -> None:
+        self.game_id = game_id
+        self.source_db_path = source_db_path
+        self.source_game = source_game
+        self.source_gallery = source_gallery
+        # 증분 커서를 games 테이블에서 로드(영속) — 재시작 시 백필 폭주 방지.
+        self._last_post_no = db.get_game_cursor(game_id)
+        self._initialized = self._last_post_no > 0   # 이미 수집 이력 있으면 백필 생략
 
     def _connect(self) -> sqlite3.Connection:
-        conn = sqlite3.connect(
-            f"file:{settings.dcinside_db_path}?mode=ro", uri=True, timeout=5.0
-        )
+        conn = sqlite3.connect(f"file:{self.source_db_path}?mode=ro", uri=True, timeout=5.0)
         conn.row_factory = sqlite3.Row
         return conn
 
@@ -204,6 +209,14 @@ class DcinsideCollector:
         return dt.astimezone(timezone.utc).isoformat()
 
     def fetch_new_posts(self) -> list[dict]:
+        # game 필터는 필수: 같은 원본 DB에 여러 게임이 들어와도 다른 게임의 글을
+        # 현재 TrendSys game_id로 잘못 태깅하지 않는다. gallery는 한 게임 안에서
+        # 특정 디씨 게시판만 선택할 때 추가로 좁히는 선택 필터다.
+        source_clause = " AND game = ?"
+        source_params = [self.source_game]
+        if self.source_gallery:
+            source_clause += " AND gallery = ?"
+            source_params.append(self.source_gallery)
         with self._connect() as conn:
             if not self._initialized:
                 self._initialized = True
@@ -212,14 +225,14 @@ class DcinsideCollector:
                 ).strftime("%Y-%m-%d %H:%M:%S")
                 rows = conn.execute(
                     "SELECT post_no, title, content, post_time, url FROM posts "
-                    "WHERE post_time >= ? ORDER BY post_no",
-                    (since_kst,),
+                    f"WHERE post_time >= ?{source_clause} ORDER BY post_no",
+                    [since_kst, *source_params],
                 ).fetchall()
             else:
                 rows = conn.execute(
                     "SELECT post_no, title, content, post_time, url FROM posts "
-                    "WHERE post_no > ? ORDER BY post_no",
-                    (self._last_post_no,),
+                    f"WHERE post_no > ?{source_clause} ORDER BY post_no",
+                    [self._last_post_no, *source_params],
                 ).fetchall()
 
         posts = []
@@ -228,6 +241,7 @@ class DcinsideCollector:
             if not r["post_time"]:
                 continue
             posts.append({
+                "game_id": self.game_id,
                 "id": str(r["post_no"]),
                 "title": r["title"] or "",
                 "body": r["content"] or "",
@@ -238,8 +252,8 @@ class DcinsideCollector:
 
 
 def get_collector() -> Collector:
-    if settings.collector_backend == "dcinside":
-        return DcinsideCollector()
+    # dcinside 는 게임별로 collect_step 에서 직접 생성(게임마다 소스/커서가 다름).
+    # 여기서는 mock 만 반환한다.
     if settings.collector_backend == "mock":
         return MockCollector()
     raise ValueError(f"알 수 없는 수집 백엔드: {settings.collector_backend}")

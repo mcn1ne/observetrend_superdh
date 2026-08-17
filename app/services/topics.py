@@ -53,26 +53,29 @@ _MERGE_SYSTEM = (
 
 
 def _greedy_groups(embeddings: np.ndarray, threshold: float) -> list[list[int]]:
-    """중심벡터 탐욕 묶기 — 그룹 중심과 유사도 ≥ threshold 여야만 편입.
+    """average-link 탐욕 묶기 — 멤버 전원과의 평균 유사도 ≥ threshold 여야 편입.
 
-    연결 요소와 달리 사슬 병합이 없어 그룹이 조밀하다. 시간순(입력순) 순회.
+    그룹 대표벡터를 정규화하지 않은 산술평균으로 두면, 단위벡터 입력에서
+    v·(평균) = 멤버 전원과의 평균 유사도와 정확히 같다 (average-link).
+    ⚠️ 정규화 중심 비교(구현 이력 2026-07-12 이전)는 잡탕 그룹일수록 중심이
+    "만인의 허브"가 되어 눈덩이 블롭을 만들었다 (24h 창 실측: 멤버끼리 유사도
+    0.577짜리 156건 블롭). 비정규화 평균은 잡탕일수록 노름이 줄어 편입이
+    스스로 어려워진다 — 조밀 그룹만 자라는 자기 조절. 시간순(입력순) 순회.
     """
-    centroids: list[np.ndarray] = []
+    means: list[np.ndarray] = []       # 그룹별 비정규화 평균 (노름 = 응집도)
     members: list[list[int]] = []
     for i, v in enumerate(embeddings):
         best, best_sim = -1, threshold
-        for g, c in enumerate(centroids):
-            sim = float(np.dot(v, c))
+        for g, c in enumerate(means):
+            sim = float(np.dot(v, c))  # == v와 그룹 멤버들의 평균 코사인 유사도
             if sim > best_sim:
                 best, best_sim = g, sim
         if best == -1:
-            centroids.append(v.copy())
+            means.append(v.copy())
             members.append([i])
         else:
             members[best].append(i)
-            c = np.mean(embeddings[members[best]], axis=0)
-            norm = np.linalg.norm(c)
-            centroids[best] = c / norm if norm > 0 else c
+            means[best] = np.mean(embeddings[members[best]], axis=0)
     return [idxs for idxs in members if len(idxs) >= settings.topic_min_size]
 
 
@@ -229,9 +232,14 @@ def _drop_verify_cache(topic_id: int) -> None:
             pass
 
 
-def _do_merge(known: list[dict], a: dict, b: dict, sim: float, how: str) -> None:
+def _do_merge(known: list[dict], a: dict, b: dict, sim: float, how: str,
+              window_iso: str) -> None:
     keep, drop = (a, b) if a["id"] < b["id"] else (b, a)
-    c = keep["centroid"] + drop["centroid"]
+    # 병합 중심은 창 내 멤버 수 가중 평균 — 1:1 합산은 4건짜리가 200건짜리
+    # 중심을 절반이나 끌고 가서, 다음 사이클에 또 다른 주제를 잘못 흡수한다
+    n_keep = max(db.count_topic_posts(keep["id"], window_iso), 1)
+    n_drop = max(db.count_topic_posts(drop["id"], window_iso), 1)
+    c = keep["centroid"] * n_keep + drop["centroid"] * n_drop
     norm = np.linalg.norm(c)
     c = (c / norm if norm > 0 else c).astype(np.float32)
     db.merge_topics(keep["id"], drop["id"], c)
@@ -269,7 +277,7 @@ def _merge_sweep(known: list[dict], window_iso: str) -> None:
                     pair = (sim, active[i], active[j])
         if pair is None:
             break
-        _do_merge(known, pair[1], pair[2], pair[0], "자동")
+        _do_merge(known, pair[1], pair[2], pair[0], "자동", window_iso)
         active = [t for t in active if t in known]
 
     # 2) 병합 대역 — LLM 판정 (사이클당 1쌍)
@@ -298,7 +306,7 @@ def _merge_sweep(known: list[dict], window_iso: str) -> None:
     answer = extract_final_channel(out).strip().splitlines()
     verdict = answer[-1].strip().upper() if answer else ""
     if verdict.startswith("O"):
-        _do_merge(known, a, b, sim, "LLM")
+        _do_merge(known, a, b, sim, "LLM", window_iso)
     else:
         _merge_cache[key] = False            # 별개 사건 — 다시 묻지 않음
         try:
@@ -308,29 +316,48 @@ def _merge_sweep(known: list[dict], window_iso: str) -> None:
 
 
 def detect_topics(posts: list[dict], embeddings: np.ndarray,
-                  now: datetime, since_iso: str) -> list[dict]:
-    """창 내 글을 주제로 묶고 영속 추적. 반환: 주제별 {topic_id, name, idxs, centroid}."""
-    groups = _greedy_groups(embeddings, settings.topic_link_sim)
-    known = db.load_topics()
+                  now: datetime, since_iso: str, game_id: str | None = None) -> list[dict]:
+    """창 내 글을 주제로 묶고 영속 추적 (game_id 스코프). 반환: 주제별 {topic_id, name, idxs, centroid}."""
+    game_id = game_id or settings.default_game_id
+    groups = sorted(_greedy_groups(embeddings, settings.topic_link_sim),
+                    key=len, reverse=True)
+    known = db.load_topics(game_id)          # 이 게임의 주제만
     _merge_sweep(known, since_iso)           # 분열 회수 — 사이클당 최대 1쌍 판정
 
-    results: list[dict] = []
-    by_topic_id: dict[int, dict] = {}
-    assignments: dict[str, int | None] = {p["id"]: None for p in posts}
-    rename_budget = 1                        # 드리프트 재명명: 실행당 1회 (폭주 방지)
-    for idxs in sorted(groups, key=len, reverse=True):
+    centroids: list[np.ndarray] = []         # 그룹 대표 중심 (영속 매칭·저장용은 정규화)
+    for idxs in groups:
         c = np.mean(embeddings[idxs], axis=0)
         norm = np.linalg.norm(c)
         if norm > 0:
             c = c / norm
-        c = c.astype(np.float32)
+        centroids.append(c.astype(np.float32))
 
-        # 기존 주제와 중심벡터 매칭 → 같은 주제면 id 유지 (번호 재추적 문제 해결)
-        best, best_sim = None, settings.topic_match_sim
-        for t in known:
-            sim = float(np.dot(c, t["centroid"]))
-            if sim >= best_sim:
-                best, best_sim = t, sim
+    # ── 1:1 영속 매칭 — (그룹, 주제) 쌍을 유사도 내림차순으로 그리디 배정 ──
+    # 같은 사이클에서 여러 그룹이 같은 topic id에 매칭되면 벡터 단계의 분리를
+    # 도로 합쳐 혼재 주제가 된다 (실측: 아리스 장비/성능/방덱 메타 재결합).
+    # 최적 그룹 하나만 id를 승계하고, 밀린 그룹은 차선 주제 또는 신규로 보낸다.
+    by_id = {t["id"]: t for t in known}
+    pairs = sorted(
+        ((float(np.dot(c, t["centroid"])), gi, t["id"])
+         for gi, c in enumerate(centroids) for t in known),
+        key=lambda p: -p[0],
+    )
+    matched: dict[int, int] = {}              # 그룹 idx → topic_id
+    used_ids: set[int] = set()                # 이번 사이클에 이미 배정된 주제
+    for sim, gi, tid in pairs:
+        if sim < settings.topic_match_sim:
+            break                             # 내림차순이라 이후는 전부 미달
+        if gi in matched or tid in used_ids:
+            continue
+        matched[gi] = tid
+        used_ids.add(tid)
+
+    results: list[dict] = []
+    assignments: dict[str, int | None] = {p["id"]: None for p in posts}
+    rename_budget = 1                        # 드리프트 재명명: 실행당 1회 (폭주 방지)
+    for gi, idxs in enumerate(groups):
+        c = centroids[gi]
+        best = by_id.get(matched.get(gi))
 
         if best is not None:
             topic_id, name = best["id"], best["name"]
@@ -355,10 +382,13 @@ def detect_topics(posts: list[dict], embeddings: np.ndarray,
                 best["named_centroid"] = c
         else:
             # 신규 묶음 — 병합 대역의 기존 주제가 있으면 명명과 동시에
-            # "같은 사건이면 편입"을 판정 (분열의 생성 시점 예방, 추가 호출 없음)
+            # "같은 사건이면 편입"을 판정 (분열의 생성 시점 예방, 추가 호출 없음).
+            # 이번 사이클에 이미 쓰인 주제는 후보에서 제외 (1:1 규칙 유지 —
+            # 편입을 허용하면 재결합 경로가 도로 열린다)
             near = sorted(
                 (t for t in known
-                 if settings.topic_merge_band_low
+                 if t["id"] not in used_ids
+                 and settings.topic_merge_band_low
                  <= float(np.dot(c, t["centroid"])) < settings.topic_match_sim),
                 key=lambda t: -float(np.dot(c, t["centroid"])),
             )[:3]
@@ -369,16 +399,20 @@ def detect_topics(posts: list[dict], embeddings: np.ndarray,
                 db.touch_topic(topic_id, c)
             else:
                 name = named
-                # 같은 이름의 주제가 이미 있으면 그리로 편입 — 같은 주제가 매칭
-                # 문턱 바로 아래에서 갈라지면 각각 생성되며 이름이 겹친다
-                dup = next((t for t in known if t["name"] == name), None)
+                # 같은 이름의 미사용 주제가 있으면 그리로 편입 — 같은 주제가
+                # 매칭 문턱 바로 아래에서 갈라지면 각각 생성되며 이름이 겹친다
+                dup = next((t for t in known
+                            if t["name"] == name and t["id"] not in used_ids), None)
                 if dup is not None:
                     topic_id = dup["id"]
                     db.touch_topic(topic_id, c)
                 else:
-                    topic_id = db.create_topic(name, c)
-                    known.append({"id": topic_id, "name": name, "centroid": c,
-                                  "named_centroid": c, "last_alerted_at": None})
+                    topic_id = db.create_topic(name, c, game_id)
+                    entry = {"id": topic_id, "name": name, "centroid": c,
+                             "named_centroid": c, "last_alerted_at": None}
+                    known.append(entry)
+                    by_id[topic_id] = entry
+            used_ids.add(topic_id)
 
         for i in idxs:
             # 검증에서 X 판정된 글은 주제 배정도 하지 않음 (주제 글 목록 정화)
@@ -386,17 +420,11 @@ def detect_topics(posts: list[dict], embeddings: np.ndarray,
                 continue
             assignments[posts[i]["id"]] = topic_id
 
-        if topic_id in by_topic_id:
-            # 서로 다른 연결 요소가 같은 영속 주제에 매칭됨 → 병합
-            by_topic_id[topic_id]["idxs"] = list(by_topic_id[topic_id]["idxs"]) + list(idxs)
-        else:
-            item = {
-                "topic_id": topic_id, "name": name, "idxs": list(idxs), "centroid": c,
-                "last_alerted_at": next(
-                    (t.get("last_alerted_at") for t in known if t["id"] == topic_id), None),
-            }
-            by_topic_id[topic_id] = item
-            results.append(item)
+        results.append({
+            "topic_id": topic_id, "name": name, "idxs": list(idxs), "centroid": c,
+            "last_alerted_at": next(
+                (t.get("last_alerted_at") for t in known if t["id"] == topic_id), None),
+        })
 
-    db.set_topic_assignments(assignments, since_iso)
+    db.set_topic_assignments(assignments, since_iso, game_id)
     return results
