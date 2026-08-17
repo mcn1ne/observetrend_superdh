@@ -17,7 +17,6 @@ import numpy as np
 from app import db
 from app.config import settings
 from app.services.caption import get_captioner
-from app.services.categorize import get_categorizer
 from app.services.clustering import get_clusterer, group_by_label
 from app.services.collect import DcinsideCollector, get_collector
 from app.services.detection import cluster_heat, is_burst, post_age_minutes
@@ -34,7 +33,7 @@ def slot_status() -> dict:
     """각 단계 슬롯의 백엔드/준비 상태 (상태 API·UI 표시용)."""
     embedder, clusterer = get_embedder(), get_clusterer()
     summarizer, judge = get_summarizer(), get_judge()
-    captioner, categorizer = get_captioner(), get_categorizer()
+    captioner = get_captioner()
     return {
         "collector": {"backend": settings.collector_backend, "ready": settings.collector_backend != "mock",
                       "name": "mock (가상 게시판 시뮬레이터)" if settings.collector_backend == "mock"

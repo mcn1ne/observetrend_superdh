@@ -330,13 +330,6 @@ def init_db() -> None:
 
 # ── 게임 레지스트리 ─────────────────────────────────────────────────
 
-def load_games() -> list[dict]:
-    with _connect() as conn:
-        return [dict(r) for r in conn.execute(
-            "SELECT id, name, source_db_path, source_game, source_gallery, last_post_no "
-            "FROM games ORDER BY id")]
-
-
 def get_game_cursor(game_id: str) -> int:
     with _connect() as conn:
         r = conn.execute("SELECT last_post_no FROM games WHERE id = ?", (game_id,)).fetchone()
@@ -522,13 +515,6 @@ def update_category_centroid(category_id: int, centroid: np.ndarray, post_count:
         conn.execute(
             "UPDATE categories SET centroid = ?, post_count = ?, updated_at = ? WHERE id = ?",
             (np.asarray(centroid, dtype=np.float32).tobytes(), post_count, _now(), category_id),
-        )
-
-
-def mark_category_alerted(category_id: int) -> None:
-    with _connect() as conn:
-        conn.execute(
-            "UPDATE categories SET last_alerted_at = ? WHERE id = ?", (_now(), category_id)
         )
 
 
