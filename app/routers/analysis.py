@@ -229,9 +229,13 @@ async def trigger_recluster_check():
 
 @router.get("/gemma/analyses")
 async def get_gemma_analyses(hours: int = 24, limit: int = 200, game: str | None = None):
-    """글 단위 분석(adapters4) 결과 + 큐 상태."""
+    """글 단위 분석(adapters4) 결과 + 큐 상태 + 라벨 판정 진행률."""
+    from app.services.label_category import cache_stats, pending_count
+
     return {
         "queue": db.analysis_queue_stats(game),
+        # '일반' 세분화용 라벨 판정 — pending 이 0으로 수렴하면 키워드 폴백이 사실상 안 쓰인다
+        "labels": {**cache_stats(), "pending": await asyncio.to_thread(pending_count, game)},
         "results": db.load_analyses(hours, limit, game),
     }
 

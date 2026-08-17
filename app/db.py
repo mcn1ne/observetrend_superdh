@@ -964,6 +964,23 @@ def majority_topic_label(post_ids: list[str], game_id: str | None = None) -> str
     return row["topic_label"] if row else None
 
 
+def load_general_labels(game_id: str | None = None, limit: int = 500) -> list[tuple[str, int]]:
+    """major='일반' 주제문구를 (라벨, 글 수) 로 빈도 내림차순 반환.
+
+    라벨 판정(services/label_category)의 대상 목록이다. 빈도순이라 앞쪽 몇 개만
+    판정해도 글 커버리지가 빠르게 올라간다 (실측: 상위 10개가 '일반' 글의 65%).
+    """
+    game_id = game_id or settings.default_game_id
+    with _connect() as conn:
+        rows = conn.execute(
+            "SELECT topic_label, COUNT(*) n FROM post_analysis "
+            "WHERE game_id = ? AND major = '일반' AND topic_label IS NOT NULL "
+            "GROUP BY topic_label ORDER BY n DESC LIMIT ?",
+            (game_id, limit),
+        ).fetchall()
+    return [(r["topic_label"], r["n"]) for r in rows]
+
+
 def analysis_queue_stats(game_id: str | None = None, max_attempts: int = 3) -> dict:
     game_id = game_id or settings.default_game_id
     with _connect() as conn:

@@ -181,6 +181,16 @@ class Settings(BaseSettings):
     analyzer_adapter_path: str = "/Users/mcn1ne/GreatestStep/adapters4"
     analyzer_max_tokens: int = 96       # 학습 출력이 한 줄 — 사고 채널 없음
 
+    # ── 라벨 판정 ('일반'을 캐릭터·장비·덱 / 일반·잡담으로 가르기) ──
+    # 기본형 LLM이 주제문구를 보고 O/X를 정하고, 판정은 라벨 문자열로 캐시한다.
+    # 판정 전 라벨은 기존 키워드 규칙(categorize._BUILD_KEYWORDS)으로 폴백하므로
+    # 꺼도 분류 품질이 이전보다 나빠지지 않는다.
+    # 비용이 글이 아니라 '고유 라벨' 수에 묶인다 (실측: '일반' 글 4,048건 → 라벨 560개,
+    # 상위 10개가 글의 65%·상위 50개가 83% 커버, 신규 라벨은 하루 26~105개).
+    label_classify_enabled: bool = True
+    label_classify_batch_size: int = 5      # 한 번에 물어볼 라벨 수
+    label_classify_per_cycle: int = 1       # Gemma 워커 사이클당 배치 수 (adapters4와 MLX 공유)
+
     # ── LLM 생성 토큰 상한 (.env 로 제어) ─────────────────────────
     # 로컬 Gemma 4는 사고(thinking) 예산이 따로 없어 사고+답변이 이 상한을
     # 함께 쓴다. 상한(cap)일 뿐이라 크게 잡아도 모델이 일찍 끝내면 비용 없음.

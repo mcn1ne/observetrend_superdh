@@ -64,6 +64,7 @@ async def gemma_worker_loop():
     큐가 남아 있으면 쉬지 않고 연속으로 배치를 돌린다.
     """
     from app.services.gemma_analyze import analyze_batch
+    from app.services.label_category import classify_batch
 
     while True:
         try:
@@ -74,6 +75,15 @@ async def gemma_worker_loop():
                 stats = await asyncio.to_thread(analyze_batch, g.id)
                 if stats["taken"] >= settings.gemma_batch_size:
                     queue_busy = True
+
+            # 글 분석 큐가 한가할 때만 라벨 판정을 돌린다 — 둘 다 같은 MLX 단일
+            # 스레드를 쓰므로, 밀린 글 분석(관제 신선도)이 항상 우선이다.
+            if settings.label_classify_enabled and not queue_busy:
+                for g in settings.games:
+                    for _ in range(settings.label_classify_per_cycle):
+                        if (await asyncio.to_thread(classify_batch, g.id))["taken"] == 0:
+                            break            # 이 게임은 미판정 라벨이 없음
+
             if queue_busy:
                 continue                     # 큐가 밀려 있음 → 곧바로 다음 배치
         except Exception as e:

@@ -48,6 +48,11 @@ MAJOR_CATEGORY_MAP = {
     "과금": "과금",
     "버그": "버그·오류",
 }
+# ⚠️ 폴백 전용. '일반' 세분화의 주 판정자는 services/label_category 의 LLM 라벨 판정이고,
+# 이 목록은 아직 판정되지 않은 라벨에만 쓰인다. 세븐나이츠·나혼렙 어휘라 다른 게임에는
+# 잘 맞지 않으며(쿠키런의 '토핑'·'젤리'가 없다), 부분 문자열 매칭이라 오탐도 난다
+# ('강화'가 "서버 안정성 강화 요청"에 걸린다). 새 게임 때문에 이 목록을 늘리지 말 것 —
+# 라벨 판정이 그 일을 대신한다.
 _BUILD_KEYWORDS = (
     "캐릭터", "헌터", "육성", "장비", "세팅", "셋팅", "덱", "스킬",
     "무기", "아티", "아티팩트", "돌파", "초월", "강화", "조합",
@@ -55,13 +60,21 @@ _BUILD_KEYWORDS = (
 
 
 def category_name_from_analysis(major: str | None, topic_label: str | None) -> str:
-    """adapters4의 major+topic_label을 영속 대분류 이름으로 변환한다."""
+    """adapters4의 major+topic_label을 영속 대분류 이름으로 변환한다.
+
+    major 5종은 표로 직행하고, '일반'만 한 번 더 가른다:
+    LLM 라벨 판정이 있으면 그것을, 아직 없으면 키워드 규칙을 쓴다.
+    """
     if major in MAJOR_CATEGORY_MAP:
         return MAJOR_CATEGORY_MAP[major]
     label = topic_label or ""
-    if any(k in label for k in _BUILD_KEYWORDS):
-        return "캐릭터·장비·덱"
-    return "일반·잡담"
+
+    from app.services.label_category import verdict
+
+    is_build = verdict(label)
+    if is_build is None:                 # 미판정 라벨 → 기존 규칙으로 폴백
+        is_build = any(k in label for k in _BUILD_KEYWORDS)
+    return "캐릭터·장비·덱" if is_build else "일반·잡담"
 
 
 def assign_from_analysis(post: dict, analysis: dict, game_id: str | None = None) -> int:
