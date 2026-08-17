@@ -208,15 +208,17 @@ async def get_cosine_cluster(threshold: float = 0.92, hours: int = 24):
 
 
 @router.post("/maintenance/reclassify")
-async def trigger_reclassify(hours: int = 72, max_sim: float | None = None):
+async def trigger_reclassify(hours: int = 72, max_sim: float | None = None,
+                             game: str | None = None):
     """전체 재분류: 현재 카테고리 체계로 창 내 모든 글을 LLM 배치 재분류.
 
     콜드스타트 오배정 교정용. 글 수천 건 기준 수십 분 소요될 수 있음.
     max_sim 지정 시 자기 카테고리 중심과 유사도 < max_sim 인 의심 글만 교정.
+    game 미지정 시 기본 게임.
     """
     from app.services.categorize import reclassify_window
 
-    return await asyncio.to_thread(reclassify_window, hours, 10, max_sim)
+    return await asyncio.to_thread(reclassify_window, hours, 10, max_sim, game)
 
 
 @router.post("/maintenance/recluster-check")

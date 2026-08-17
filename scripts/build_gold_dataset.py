@@ -36,7 +36,7 @@ import numpy as np
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from app.config import settings
-from app.services.gemma_analyze import DOMAIN_CONTEXT
+from app.services.gemma_analyze import domain_context
 
 VERIFY_BATCH = 5          # gemma_batch_size와 동일 근거 (건성 라벨링 방지)
 EXEMPLARS_N = 8           # 클러스터 명명·검증 기준으로 보여줄 대표글 수
@@ -90,7 +90,7 @@ def run_hdbscan(embeddings: np.ndarray, min_cluster_size: int) -> np.ndarray:
 # ── LLM 검증 (클러스터 명명 → 멤버 O/X + X 사유) ─────────────────────
 
 _NAME_SYS = (
-    "너는 게임 커뮤니티 게시판의 동향 분석가다.\n" + DOMAIN_CONTEXT + "\n\n"
+    "너는 게임 커뮤니티 게시판의 동향 분석가다.\n" + domain_context() + "\n\n"
     "아래 글 목록이 하나의 클러스터다. '이름|성격' 형식 한 줄만 출력하라.\n"
     "- 이름: 한국어 2~4어절의 일반화된 명사구. 특정 글 제목 복사 금지.\n"
     "  좋은 예: '뽑기 확률 불만', '신규 전장 공략 질문' / 나쁜 예: 제목 그대로, 한 단어\n"
@@ -99,7 +99,7 @@ _NAME_SYS = (
 )
 
 _VERIFY_SYS_TMPL = (
-    "너는 게임 커뮤니티 게시판의 동향 분석가다.\n" + DOMAIN_CONTEXT + "\n\n"
+    "너는 게임 커뮤니티 게시판의 동향 분석가다.\n" + domain_context() + "\n\n"
     "동향(클러스터): 「{name}」\n대표 글:\n{exemplars}\n\n"
     "아래 [검증 목록]의 각 글이 이 동향에 속하는지 판정한다 (충분히 생각한 뒤 답하라).\n"
     "글마다 아래 형식으로 한 줄씩, 반드시 2개 필드를 출력한다.\n"

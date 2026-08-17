@@ -17,14 +17,37 @@ from app.config import settings
 # 디씨 갤러리 특성 — 재분류·요약 등 기본형 프롬프트가 공유하는 도메인 컨텍스트.
 # ⚠️ 이게 없으면 기본형이 반어·밈을 문자 그대로 읽어 '환불/오류' 단어에만 반응한다 (실측).
 # (adapters4 자체는 학습으로 도메인을 익혔으므로 이 컨텍스트를 쓰지 않는다)
-DOMAIN_CONTEXT = (
-    "대상은 모바일 게임 '세븐나이츠 리버스'의 디시인사이드 갤러리다.\n"
+#
+# ⚠️ 게임 이름 말고는 전부 디시 갤러리 공통이다. 그래서 게임별로 달라지는 것은
+# {game} 하나뿐이고, 나머지는 어느 게임이든 그대로 쓴다. 게임 고유 은어가 필요하면
+# GameConfig.domain_extra 로 덧붙인다 (기본 빈 값).
+# ⚠️ "모바일 게임"이라는 표현은 의도적으로 유지한다 — 이 문구로 캘리브레이션된
+# 기존 게임의 프롬프트를 한 글자도 바꾸지 않기 위해서다. 플랫폼이 다른 게임이
+# 등록되면 domain_extra 로 바로잡는다.
+DOMAIN_CONTEXT_TMPL = (
+    "대상은 모바일 게임 '{game}'의 디시인사이드 갤러리다.\n"
     "이 커뮤니티는 반어·과장·욕설·밈이 기본 화법이다: '망겜', '접는다', '환불각', "
     "'섭종해라' 같은 표현은 대부분 상투적 푸념이지 실제 사건 제보가 아니다. "
     "'뒷삭'은 갤러리 글 삭제를 뜻하는 갤 내부 용어다(게임 계정과 무관).\n"
     "단어가 아니라 글 전체 맥락으로 판단하라: 화자가 '실제로 겪은 구체적 사실'을 "
     "서술하는지, 아니면 감정·냉소·농담을 표출하는지 구분하는 것이 핵심이다."
 )
+
+
+def domain_context(game_id: str | None = None) -> str:
+    """game_id 의 도메인 설명. 미등록 id 면 기본 게임 이름으로 폴백한다.
+
+    ⚠️ 기본형 LLM을 부르는 모든 곳은 반드시 이 함수를 game_id 와 함께 쓸 것.
+    상수를 그대로 쓰면 다른 게임의 글을 기본 게임 갤러리라고 설명하게 된다.
+    """
+    game_id = game_id or settings.default_game_id
+    game = next((g for g in settings.games if g.id == game_id), None)
+    if game is None:
+        game = next((g for g in settings.games if g.id == settings.default_game_id), None)
+    if game is None:                      # 등록된 게임이 하나도 없는 경우(테스트 등)
+        return DOMAIN_CONTEXT_TMPL.format(game=game_id)
+    text = DOMAIN_CONTEXT_TMPL.format(game=game.name)
+    return f"{text}\n{game.domain_extra}" if game.domain_extra else text
 
 MAJORS = {"일반", "콘텐츠", "운영", "밸런스", "과금", "버그"}
 SENTIMENTS = {

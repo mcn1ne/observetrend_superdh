@@ -177,7 +177,7 @@ def analyze_step(game_id: str | None = None) -> tuple[list[dict], dict, list[dic
         # 관제 화면 정화: 검증 캐시는 모든 주제에 상시 적용, 미검증분은
         # 사이클당 예산 안에서 점진 판정 (topic_groups는 큰 주제 순 → 우선순위)
         group, vstats = verify_topic_members(tg["topic_id"], tg["name"], group,
-                                             batch_limit=verify_budget)
+                                             batch_limit=verify_budget, game_id=game_id)
         verify_budget -= vstats["spent"]
         if len(group) < settings.topic_min_size:
             continue                     # 검증으로 실체가 사라진 주제는 표시 안 함
@@ -216,7 +216,7 @@ def analyze_step(game_id: str | None = None) -> tuple[list[dict], dict, list[dic
             # 알림 길목은 예산과 무관하게 우선 검증 — 이물질이 요약·판단을
             # 오염시키면 안 된다. 미검증 잔여분은 다음 사이클에서 마저 처리.
             group, vstats = verify_topic_members(tg["topic_id"], tg["name"], group,
-                                                 batch_limit=2)
+                                                 batch_limit=2, game_id=game_id)
             item["verify"] = vstats
             if len(group) < settings.topic_min_size:
                 item["is_burst"] = False                 # 검증 후 실체 없음 → 취소
@@ -237,7 +237,7 @@ def analyze_step(game_id: str | None = None) -> tuple[list[dict], dict, list[dic
                 continue
             idx_by_id = {posts[i]["id"]: i for i in tg["idxs"]}
             vecs = embeddings[[idx_by_id[p["id"]] for p in group]]
-            s = summarizer.summarize(group, vecs)
+            s = summarizer.summarize(group, vecs, game_id=game_id)
             # 라벨 = 멤버 글들의 adapters4 주제문구 다수결 — 판단 모델(adapters3)의
             # 학습 입력 라벨과 같은 어휘라 분포가 일치한다. 분석 전이면 주제명 폴백.
             s["label"] = (db.majority_topic_label([p["id"] for p in group], game_id)

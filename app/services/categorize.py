@@ -331,25 +331,30 @@ _RECLASSIFY_SYSTEM_TMPL = (
 
 
 def reclassify_window(hours: int = 72, batch_size: int = 10,
-                      max_sim: float | None = None) -> dict:
+                      max_sim: float | None = None,
+                      game_id: str | None = None) -> dict:
     """고정된 현재 카테고리 체계로 창 내 글을 LLM 배치 재분류.
 
     콜드스타트(카테고리가 몇 개 없던 시기)에 잘못 배정된 글들을 교정한다.
     max_sim 지정 시 자기 카테고리 중심과 유사도가 그 미만인 '의심 글'만 대상
     (전체 재분류 없이 오배정 교정 패스만 돌릴 때 — 분포 하위 ~20%가 0.62 부근).
     끝나면 각 카테고리 중심벡터를 교정된 구성원 기준으로 재계산한다.
+
+    game_id 는 카테고리·글 조회 범위이자 프롬프트의 도메인 설명이다 (기본 게임 폴백).
     """
-    from app.services.gemma_analyze import DOMAIN_CONTEXT
+    from app.services.gemma_analyze import domain_context
     from app.services.mlx_runtime import generate_text
 
-    cats = db.load_categories()
+    game_id = game_id or settings.default_game_id
+    cats = db.load_categories(game_id)
     if not cats:
         return {"error": "카테고리 없음"}
     cat_list = "\n".join(f"{i+1}. {c['name']}" for i, c in enumerate(cats))
     idx_to_id = {i + 1: c["id"] for i, c in enumerate(cats)}
-    system = _RECLASSIFY_SYSTEM_TMPL.format(domain=DOMAIN_CONTEXT)
+    system = _RECLASSIFY_SYSTEM_TMPL.format(domain=domain_context(game_id))
 
-    posts = [p for p in db.load_recent_posts(hours) if p.get("category_id") is not None]
+    posts = [p for p in db.load_recent_posts(hours, game_id)
+             if p.get("category_id") is not None]
     if max_sim is not None:
         cen_by_id = {c["id"]: c["centroid"] for c in cats}
         posts = [
@@ -391,23 +396,25 @@ def reclassify_window(hours: int = 72, batch_size: int = 10,
                 continue
             new_id = idx_to_id[cat_idx]
             if new_id != p["category_id"]:
-                db.assign_category(p["id"], new_id)
+                db.assign_category(p["id"], new_id, game_id)
                 moved += 1
             else:
                 kept += 1
 
-    _rebuild_centroids(hours)
-    return {"total": len(posts), "moved": moved, "kept": kept, "parse_failed": failed}
+    _rebuild_centroids(hours, game_id)
+    return {"game_id": game_id, "total": len(posts), "moved": moved,
+            "kept": kept, "parse_failed": failed}
 
 
-def _rebuild_centroids(hours: int) -> None:
+def _rebuild_centroids(hours: int, game_id: str | None = None) -> None:
     """교정된 배정 기준으로 카테고리 중심벡터·글 수를 재계산."""
-    posts = [p for p in db.load_recent_posts(hours)
+    game_id = game_id or settings.default_game_id
+    posts = [p for p in db.load_recent_posts(hours, game_id)
              if p.get("category_id") is not None and p.get("embedding") is not None]
     by_cat: dict[int, list[np.ndarray]] = {}
     for p in posts:
         by_cat.setdefault(p["category_id"], []).append(p["embedding"])
-    for c in db.load_categories():
+    for c in db.load_categories(game_id):
         vecs = by_cat.get(c["id"])
         if not vecs:
             continue

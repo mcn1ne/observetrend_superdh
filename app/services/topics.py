@@ -160,7 +160,8 @@ _VERIFY_LINE = re.compile(r"\s*(\d+)\s*[:.]\s*([OX])")
 
 
 def verify_topic_members(topic_id: int, name: str, group: list[dict],
-                         batch_limit: int = 1, batch_size: int = 5) -> tuple[list[dict], dict]:
+                         batch_limit: int = 1, batch_size: int = 5,
+                         game_id: str | None = None) -> tuple[list[dict], dict]:
     """주제 멤버를 LLM으로 점진 검증. 반환: (X 제외한 멤버, 통계).
 
     판정은 (topic_id, post_id) 단위로 캐시 — 같은 글을 두 번 묻지 않는다.
@@ -168,12 +169,13 @@ def verify_topic_members(topic_id: int, name: str, group: list[dict],
     미검증분은 실행당 batch_limit 배치만 처리해 analyze 루프(60초 주기)를
     오래 막지 않는다. 미검증 글은 일단 포함 (몇 분에 걸쳐 점진적으로 정화).
     """
-    from app.services.gemma_analyze import DOMAIN_CONTEXT
+    from app.services.gemma_analyze import domain_context
     from app.services.mlx_runtime import extract_final_channel, generate_text
 
     cache = _verify_cache.setdefault(topic_id, {})
     todo = [p for p in group if p["id"] not in cache][: batch_limit * batch_size]
-    system = _VERIFY_SYSTEM_TMPL.format(domain=DOMAIN_CONTEXT, name=name)
+    game_id = game_id or (group[0].get("game_id") if group else None)
+    system = _VERIFY_SYSTEM_TMPL.format(domain=domain_context(game_id), name=name)
     for start in range(0, len(todo), batch_size):
         chunk = todo[start:start + batch_size]
         listing = "\n".join(
@@ -254,7 +256,7 @@ def _do_merge(known: list[dict], a: dict, b: dict, sim: float, how: str,
     print(f"[주제 병합·{how}] 「{drop['name']}」({drop['id']}) → 「{keep['name']}」({keep['id']}) sim={sim:.3f}")
 
 
-def _merge_sweep(known: list[dict], window_iso: str) -> None:
+def _merge_sweep(known: list[dict], window_iso: str, game_id: str | None = None) -> None:
     """분열 회수 — 매 사이클 호출 (관제 요구: 분 단위 회수, 일 배치는 무의미).
 
     1) 중심 유사도 ≥ topic_match_sim 쌍: 시스템 정의상 '같은 주제' → 즉시 병합
@@ -263,7 +265,7 @@ def _merge_sweep(known: list[dict], window_iso: str) -> None:
        '별개' 판정은 캐시(파일 영속)해 다시 묻지 않는다.
     known 리스트는 병합 결과를 반영해 제자리 수정된다.
     """
-    from app.services.gemma_analyze import DOMAIN_CONTEXT
+    from app.services.gemma_analyze import domain_context
     from app.services.mlx_runtime import extract_final_channel, generate_text
 
     active = [t for t in known if t["last_seen_at"] >= window_iso]
@@ -299,7 +301,7 @@ def _merge_sweep(known: list[dict], window_iso: str) -> None:
     lines_b = "\n".join(f"- {t}" for t in db.load_topic_titles(b["id"]))
     out = generate_text(
         settings.categorizer_model,
-        [{"role": "system", "content": _MERGE_SYSTEM.format(domain=DOMAIN_CONTEXT)},
+        [{"role": "system", "content": _MERGE_SYSTEM.format(domain=domain_context(game_id))},
          {"role": "user", "content": f"[주제 A] {a['name']}\n{lines_a}\n\n[주제 B] {b['name']}\n{lines_b}"}],
         max_tokens=settings.summarizer_max_tokens,   # 사고 채널 여유
     )
@@ -322,7 +324,7 @@ def detect_topics(posts: list[dict], embeddings: np.ndarray,
     groups = sorted(_greedy_groups(embeddings, settings.topic_link_sim),
                     key=len, reverse=True)
     known = db.load_topics(game_id)          # 이 게임의 주제만
-    _merge_sweep(known, since_iso)           # 분열 회수 — 사이클당 최대 1쌍 판정
+    _merge_sweep(known, since_iso, game_id)  # 분열 회수 — 사이클당 최대 1쌍 판정
 
     centroids: list[np.ndarray] = []         # 그룹 대표 중심 (영속 매칭·저장용은 정규화)
     for idxs in groups:

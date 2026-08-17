@@ -50,8 +50,9 @@ class Summarizer(Protocol):
     ready: bool
     name: str
 
-    def summarize(self, posts: list[dict], embeddings: np.ndarray | None = None) -> dict:
-        """→ {label, title, summary}"""
+    def summarize(self, posts: list[dict], embeddings: np.ndarray | None = None,
+                  game_id: str | None = None) -> dict:
+        """→ {label, title, summary}. game_id 는 도메인 설명(어느 갤러리인지)에 쓰인다."""
         ...
 
 
@@ -61,8 +62,9 @@ class StubSummarizer:
     ready = False
     name = "stub (추출식 — 대표 제목 나열)"
 
-    def summarize(self, posts: list[dict], embeddings: np.ndarray | None = None) -> dict:
-        order = _representative_order(posts, embeddings)
+    def summarize(self, posts: list[dict], embeddings: np.ndarray | None = None,
+                  game_id: str | None = None) -> dict:
+        order = _representative_order(posts, embeddings)   # game_id 불필요 (LLM 미사용)
         rep_title = posts[order[0]]["title"]
         top_titles = []
         for i in order:
@@ -86,7 +88,8 @@ class MLXSummarizer:
     def __init__(self) -> None:
         self.name = f"mlx ({settings.summarizer_model})"
 
-    def summarize(self, posts: list[dict], embeddings: np.ndarray | None = None) -> dict:
+    def summarize(self, posts: list[dict], embeddings: np.ndarray | None = None,
+                  game_id: str | None = None) -> dict:
         from app.services.mlx_runtime import generate_text
 
         order = _representative_order(posts, embeddings)[:MAX_POSTS_IN_PROMPT]
@@ -94,10 +97,13 @@ class MLXSummarizer:
             f"{n}. {posts[i]['title']}" + (f" — {snippet}" if (snippet := _body_snippet(posts[i])) else "")
             for n, i in enumerate(order, 1)
         )
-        from app.services.gemma_analyze import DOMAIN_CONTEXT
+        from app.services.gemma_analyze import domain_context
+
+        # 호출부가 game_id 를 안 넘겼으면 글에서 되찾는다 (묶음은 한 게임 안에서만 생긴다)
+        game_id = game_id or (posts[0].get("game_id") if posts else None)
 
         prompt_text = (
-            DOMAIN_CONTEXT + "\n\n"
+            domain_context(game_id) + "\n\n"
             "아래는 같은 주제로 묶인 이 갤러리의 글 모음이다.\n"
             "이 묶음이 무슨 주제이고 사람들이 어떤 반응/불만/요청을 하는지 요약하라.\n"
             "반어·밈·상투적 푸념은 실제 사건·피해 제보와 구분해서 서술하라 "

@@ -15,10 +15,16 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 class GameConfig(BaseModel):
     """관제 대상 게임 1개. 여러 게임을 한 프로세스에서 game_id 로 분리한다."""
     id: str                              # game_id (슬러그, DB 파티션 키)
-    name: str                            # 표시 이름
+    name: str                            # 표시 이름 — 기본형 프롬프트의 도메인 설명에 그대로 들어간다
     source_db_path: str                  # 크롤러 DB(DB1) 경로
     source_game: str                     # DB1 posts.game 정확 일치 필터 (게임 혼입 방지)
     source_gallery: str | None = None    # 소스 DB가 여러 갤러리를 담을 때 필터 (None=전체)
+    # 기본형 프롬프트(요약·멤버검증·병합·재분류)에 덧붙일 게임 고유 맥락.
+    # 게임 이름은 name 에서 자동으로 채워지므로 여기 다시 쓰지 않는다. 이 칸은
+    # 이름만으로는 안 나오는 것 — 그 갤러리 고유 은어 — 을 적는 자리다.
+    # 예: "'방덱'은 결투장 방어덱, '상결'은 상급 결투장을 뜻한다."
+    # 비워두면 게임 무관한 공통 설명만 쓴다 (새 게임의 안전한 기본값).
+    domain_extra: str = ""
 
 
 class Settings(BaseSettings):
