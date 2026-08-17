@@ -221,6 +221,36 @@ async def trigger_reclassify(hours: int = 72, max_sim: float | None = None,
     return await asyncio.to_thread(reclassify_window, hours, 10, max_sim, game)
 
 
+@router.post("/maintenance/discover-games")
+async def trigger_discover_games():
+    """수집원에 새로 나타난 게임을 지금 즉시 탐색·등록 (주기 실행과 별개).
+
+    등록되면 다음 수집 사이클부터 그 게임의 글이 들어온다.
+    """
+    from app.services.discovery import register_new_games
+
+    return await asyncio.to_thread(register_new_games)
+
+
+@router.get("/maintenance/discoverable-games")
+async def get_discoverable_games():
+    """수집원의 게임 목록과 등록 여부 — 문턱에 걸려 빠진 게임을 확인할 때."""
+    from app.services.discovery import scan_source
+
+    found = await asyncio.to_thread(
+        scan_source, settings.dcinside_db_path, 0, settings.game_discovery_days)
+    known = {g.source_game for g in settings.games}
+    return {
+        "min_posts": settings.game_discovery_min_posts,
+        "days": settings.game_discovery_days,
+        "games": [
+            {**row, "registered": row["game"] in known,
+             "meets_threshold": row["n"] >= settings.game_discovery_min_posts}
+            for row in found
+        ],
+    }
+
+
 @router.post("/maintenance/recluster-check")
 async def trigger_recluster_check():
     """HDBSCAN 안전망: 재클러스터링으로 카테고리 중복/누락 점검 (하루 1회 권장)."""

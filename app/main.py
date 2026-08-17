@@ -37,11 +37,20 @@ async def pipeline_loop():
     CPU를 오래 쓰는 작업은 asyncio.to_thread 로 감싸 서버 응답을 막지 않는다.
     한 번 실패해도 루프는 멈추지 않는다.
     """
+    from app.services.discovery import register_new_games
+
     store.set_loop_running(True)
     last_analyze = 0.0
     loop = asyncio.get_event_loop()
+    last_discovery = loop.time()          # 기동 시 1회는 lifespan 에서 이미 돌았다
     while True:
         try:
+            # ⓪ 게임 발견 (주기적): 수집원에 새 게임이 나타나면 등록해 수집을 시작한다.
+            #    settings.games 가 늘어나므로 아래 수집·분석이 곧바로 새 게임을 포함한다.
+            if loop.time() - last_discovery >= settings.game_discovery_interval_sec:
+                last_discovery = loop.time()
+                await asyncio.to_thread(register_new_games)
+
             # ① 수집 (다이얼 A): 새 글만 가져와 임베딩·누적 저장
             await asyncio.to_thread(collect_step)
 
@@ -117,6 +126,10 @@ async def caption_worker_loop():
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     db.init_db()
+    # 수집이 시작되기 전에 한 번 — 재기동만으로 새 게임이 잡히도록.
+    from app.services.discovery import register_new_games
+
+    register_new_games()
     store.set_slots(slot_status())
     task = asyncio.create_task(pipeline_loop())   # 서버 시작 시 루프 가동
     gemma_task = None

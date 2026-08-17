@@ -79,6 +79,14 @@ class Settings(BaseSettings):
         ),
     ]
 
+    # ── 게임 자동 발견 (수집원에 새로 나타난 게임을 런타임 등록) ──
+    # ⚠️ 문턱이 낮으면 크롤러의 오타·테스트 항목까지 관제 대상이 된다.
+    # 기존 게임과의 대조는 id 가 아니라 source_game 으로 한다 (services/discovery 참고).
+    game_discovery_enabled: bool = True
+    game_discovery_min_posts: int = 30   # 최근 창에서 이 이상 쌓여야 등록
+    game_discovery_days: int = 7         # 볼륨을 셀 창(일)
+    game_discovery_interval_sec: int = 3600   # 재탐색 주기 (기동 시 1회는 항상 수행)
+
     # ── ① 임베딩 슬롯 (03-embedding.md) — 모델 미준비 ────────────
     # stub: 키워드 기반 가짜 벡터(데모용). 모델 준비 시:
     #   1) uv sync --extra ml

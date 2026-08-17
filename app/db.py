@@ -274,6 +274,12 @@ def _create_game_indexes(conn: sqlite3.Connection) -> None:
         conn.execute(sql)
 
 
+def seed_games() -> None:
+    """settings.games 를 games 테이블에 반영 (런타임 게임 추가 후 호출)."""
+    with _connect() as conn:
+        _seed_games(conn)
+
+
 def _seed_games(conn: sqlite3.Connection) -> None:
     """settings.games 를 games 테이블에 upsert (last_post_no 커서는 보존)."""
     now = _now()
